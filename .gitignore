@@ -15,3 +15,5 @@ swanlog
 *.pth
 
 debug
+unilip_stage1/
+unilip_stage1_imagenet/

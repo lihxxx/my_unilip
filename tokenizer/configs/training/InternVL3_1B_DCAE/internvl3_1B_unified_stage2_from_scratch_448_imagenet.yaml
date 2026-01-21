@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
     name: "unilip_stage2_448_imagenet_from_scratch"
-    output_dir: "unilip_stage2_448_imagenet_from_scratch"
+    output_dir: "checkpoints/unilip_stage2_448_imagenet_from_scratch"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 5_000
     eval_every: 5_000

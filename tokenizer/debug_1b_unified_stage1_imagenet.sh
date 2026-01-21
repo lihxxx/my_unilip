@@ -18,5 +18,5 @@ torchrun \
     --nnodes=1 \
     scripts/train.py \
     config=$config_file \
-    experiment.project="debug" experiment.name="debug" experiment.output_dir="debug" training.per_gpu_batch_size=16
+    experiment.project="debug" experiment.name="debug" experiment.output_dir="checkpoints/debug" training.per_gpu_batch_size=16
 
