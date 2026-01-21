@@ -13,3 +13,5 @@ scripts/train_ddp.sh
 swanlog
 *.pt
 *.pth
+
+debug
