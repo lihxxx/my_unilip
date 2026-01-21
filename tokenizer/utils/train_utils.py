@@ -626,17 +626,19 @@ def reconstruct_images(model, original_images, fnames, accelerator,
         original_images,
         reconstructed_images
     )
-    # Log images.
-    if config.training.enable_wandb:
-        wandb.log(
-            {"Train Reconstruction": [wandb.Image(img) for img in images_for_saving]},
-            step=global_step
-        )
-    else:
-        accelerator.get_tracker("tensorboard").log_images(
-            {"Train Reconstruction": images_for_logging}, step=global_step
-        )
-    # Log locally.
+    # Log images to wandb/tensorboard (optional, controlled by config).
+    log_images_to_wandb = config.training.get("log_images_to_wandb", False)
+    if log_images_to_wandb:
+        if config.training.enable_wandb:
+            wandb.log(
+                {"Train Reconstruction": [wandb.Image(img) for img in images_for_saving]},
+                step=global_step
+            )
+        else:
+            accelerator.get_tracker("tensorboard").log_images(
+                {"Train Reconstruction": images_for_logging}, step=global_step
+            )
+    # Log locally (always save to local disk).
     root = Path(output_dir) / "train_images"
     os.makedirs(root, exist_ok=True)
     for i, img in enumerate(images_for_saving):
