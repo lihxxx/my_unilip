@@ -13,16 +13,23 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and 
 limitations under the License.
 """
+# Legacy models for backward compatibility
 from .dc_ae_vit import DC_AE_ViT
 from .dc_ae_vit_stage2 import DC_AE_ViT_Stage2
 from .dc_ae_vit_stage2_pad import DC_AE_ViT_Stage2_Pad
 from .dc_ae_vit_stage2_448 import DC_AE_ViT_Stage2_448
 from .dc_ae_vit_stage2_448_checkpoint import DC_AE_ViT_Stage2_448_Checkpoint
 
+# Unified model for all stages
+from .dc_ae_vit_unified import DC_AE_ViT_Unified
+
 model_map = {
+    # Legacy models for backward compatibility
     'DC_AE_ViT': DC_AE_ViT,
     'DC_AE_ViT_Stage2': DC_AE_ViT_Stage2,
     'DC_AE_ViT_Stage2_Pad': DC_AE_ViT_Stage2_Pad,
     'DC_AE_ViT_Stage2_448': DC_AE_ViT_Stage2_448,
     'DC_AE_ViT_Stage2_448_Checkpoint': DC_AE_ViT_Stage2_448_Checkpoint,
+    # Unified model for all stages
+    'DC_AE_ViT_Unified': DC_AE_ViT_Unified,
 }

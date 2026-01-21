@@ -1,36 +1,42 @@
 experiment:
-    project: "unilip_stage1"
-    name: "unilip_stage1_run1"
-    output_dir: "unilip_stage1_run1"
-    max_train_examples: 40_000_000
-    save_every: 25_000
-    eval_every: 25_000
-    generate_every: 5_000
+    project: "unilip_stage2_448_imagenet"
+    name: "unilip_stage2_448_imagenet"
+    output_dir: "unilip_stage2_448_imagenet"
+    max_train_examples: 1_281_167    # ImageNet训练集大小
+    save_every: 5_000
+    eval_every: 5_000
+    generate_every: 1_000
     log_every: 50
-    log_grad_norm_every: 1_000
+    log_grad_norm_every: 500
     resume: True
     init_weight: ""
 
 
 model:
-    name: DC_AE_ViT_Stage2
+    name: DC_AE_ViT_Unified
     embed_dim: 32
     patch_size: 14
-    stage1_ckpt: 1b_stage1/checkpoint-xxx/ema_model/pytorch_model.bin
     mllm_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B"
     dc_ae_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers"
+    # Stage2_448 specific: load stage2 checkpoint
+    stage1_ckpt: unilip_stage2_imagenet/checkpoint-80000/ema_model/pytorch_model.bin
+    freeze_encoder: False
+    output_distill_feat: True
+    disable_drop_path: True
+    use_gradient_checkpoint: True
     vq_model:
         quantize_mode: vae
-        finetune_decoder: False
+
 
 losses:
-    name: ReconstructionLoss_Stage2
-    discriminator_start: 200_000
+    name: ReconstructionLoss_Unified
+    discriminator_start: 0           # 448px直接开启GAN
     quantizer_weight: 1.0
     discriminator_factor: 1.0
     discriminator_weight: 0.1
     perceptual_loss: "lpips-convnext_s-1.0-0.1"
     perceptual_weight: 1.1
+    # Enable distillation
     distill_loss: OpenGVLab/InternVL3-1B
     distill_weight: 1.0
     reconstruction_loss: "l2"
@@ -41,15 +47,15 @@ losses:
 
 dataset:
     params:
-        train_shards_path_or_url: ["/mnt/tidal-alsh01/dataset/zeus/lihongxiang/dataset/BLIP3o-Pretrain-Short-Caption/*.tar", "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/dataset/BLIP3o-Pretrain-Long-Caption/*.tar", "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/dataset/BLIP3o-Pretrain-JourneyDB/*.tar"]
-        sample_ratio: [0.2, 0.6, 0.2]
+        train_shards_path_or_url: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/VGT/tokenizer/data/dataset/train/imagenet-train-{000000..000320}.tar"
         eval_shards_path_or_url: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/VGT/tokenizer/data/dataset/val/imagenet-val-{000000..000049}.tar"
         num_workers_per_gpu: 12
-        dataset_with_class_label: False
-        dataset_with_text_label: True
+        dataset_with_class_label: True
+        dataset_with_text_label: False
     preprocessing:
-        resize_shorter_edge: 224
-        crop_size: 224
+        # 448px resolution for stage2_448
+        resize_shorter_edge: 448
+        crop_size: 448
         random_crop: True
         random_flip: True
         normalize_mean: [0.485, 0.456, 0.406]
@@ -65,12 +71,14 @@ optimizer:
         beta1: 0.9
         beta2: 0.999
         weight_decay: 1e-4
+        use_encoder_lr_scale: True
+        encoder_lr_scale: 0.1
 
 lr_scheduler:
     scheduler: "cosine"
     params:
         learning_rate: ${optimizer.params.learning_rate}
-        warmup_steps: 10_000
+        warmup_steps: 3_000
         end_lr: 1e-5
 
 training:
@@ -79,8 +87,11 @@ training:
     mixed_precision: "bf16"
     enable_tf32: True
     enable_wandb: True
+    wandb_api_key: "3ed65eb52edcc37a5e278a82dd874b44d4ffadb7"
+    ddp_find_unused_parameters: False
     use_ema: True
     seed: 42
-    max_train_steps: 400_000
-    num_generated_images: 2
+    max_train_steps: 50_000
+    num_generated_images: 8
     max_grad_norm: 1.0
+

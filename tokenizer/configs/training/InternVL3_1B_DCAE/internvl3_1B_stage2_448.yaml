@@ -17,8 +17,8 @@ model:
     embed_dim: 32
     patch_size: 14
     stage1_ckpt: 1b_stage2/checkpoint-xxx/ema_model/pytorch_model.bin
-    mllm_path: OpenGVLab/InternVL3-1B
-    dc_ae_path: mit-han-lab/dc-ae-f32c32-sana-1.1-diffusers
+    mllm_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B"
+    dc_ae_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers"
     vq_model:
         quantize_mode: vae
         finetune_decoder: False
@@ -41,9 +41,9 @@ losses:
 
 dataset:
     params:
-        train_shards_path_or_url: ["BLIP3o-Pretrain/BLIP3o-Pretrain-Short-Caption/*.tar", "BLIP3o-Pretrain/BLIP3o-Pretrain-Long-Caption/*.tar", "BLIP3o-Pretrain/BLIP3o-Pretrain-JourneyDB/*.tar"]
+        train_shards_path_or_url: ["/mnt/tidal-alsh01/dataset/zeus/lihongxiang/dataset/BLIP3o-Pretrain-Short-Caption/*.tar", "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/dataset/BLIP3o-Pretrain-Long-Caption/*.tar", "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/dataset/BLIP3o-Pretrain-JourneyDB/*.tar"]
         sample_ratio: [0.2, 0.6, 0.2]
-        eval_shards_path_or_url: "imagenet_sharded/val/imagenet-val-{000000..000049}.tar"
+        eval_shards_path_or_url: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/VGT/tokenizer/data/dataset/val/imagenet-val-{000000..000049}.tar"
         num_workers_per_gpu: 12
         dataset_with_class_label: False
         dataset_with_text_label: True
