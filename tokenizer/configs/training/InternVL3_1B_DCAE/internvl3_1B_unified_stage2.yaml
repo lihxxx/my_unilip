@@ -1,5 +1,5 @@
 experiment:
-    project: "unilip_stage2"
+    project: "unilip"
     name: "unilip_stage2_run1"
     output_dir: "unilip_stage2_run1"
     max_train_examples: 40_000_000

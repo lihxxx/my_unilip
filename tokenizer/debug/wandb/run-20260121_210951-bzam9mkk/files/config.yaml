@@ -1,0 +1,75 @@
+_wandb:
+    value:
+        cli_version: 0.24.0
+        e:
+            mlu8yi9ezu48c118jh00dprizqqd3gl7:
+                args:
+                    - config=./configs/training/InternVL3_1B_DCAE/internvl3_1B_unified_stage1_imagenet.yaml
+                    - experiment.project=debug
+                    - experiment.name=debug
+                    - experiment.output_dir=debug
+                    - training.per_gpu_batch_size=16
+                codePath: tokenizer/scripts/train.py
+                codePathLocal: scripts/train.py
+                cpu_count: 96
+                cpu_count_logical: 192
+                cudaVersion: "12.8"
+                disk:
+                    /:
+                        total: "2164167442432"
+                        used: "1268607062016"
+                email: lihxxxxxx@gmail.com
+                executable: /root/miniconda3/envs/vgt/bin/python3.10
+                git:
+                    commit: ef57ae3206ecc10f9562c685ceb0b07edeef72e5
+                    remote: https://lihxxx:@github.com/lihxxx/my_unilip.git
+                gpu: NVIDIA L20Y
+                gpu_count: 2
+                gpu_nvidia:
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA L20Y
+                      uuid: GPU-bfbf2f9a-0a16-c88c-af3b-462e6736cfa1
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA L20Y
+                      uuid: GPU-b6db68e0-9d88-d440-443b-c33f353e5bea
+                host: qs-35960-1064740-ai-502364-default0-0
+                memory:
+                    total: "2163180122112"
+                os: Linux-5.10.134-19.100.al8.x86_64-x86_64-with-glibc2.35
+                program: /mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/scripts/train.py
+                python: CPython 3.10.19
+                root: debug
+                startedAt: "2026-01-21T13:09:51.185928Z"
+                writerId: mlu8yi9ezu48c118jh00dprizqqd3gl7
+        m: []
+        python_version: 3.10.19
+        t:
+            "1":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 71
+                - 83
+                - 98
+            "2":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 63
+                - 71
+                - 83
+                - 98
+            "3":
+                - 13
+                - 61
+            "4": 3.10.19
+            "5": 0.24.0
+            "6": 4.57.1
+            "12": 0.24.0
+            "13": linux-x86_64

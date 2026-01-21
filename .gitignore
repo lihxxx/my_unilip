@@ -1,0 +1,15 @@
+*.pyc
+# Python
+*__pycache__/*
+*.py[cod]
+*$py.class
+*.so
+*.tar
+*/checkpoints
+
+save_fig
+work_dirs
+scripts/train_ddp.sh
+swanlog
+*.pt
+*.pth

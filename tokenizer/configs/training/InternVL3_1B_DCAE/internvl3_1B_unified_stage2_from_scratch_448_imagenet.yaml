@@ -1,5 +1,5 @@
 experiment:
-    project: "unilip_stage2_448_imagenet"
+    project: "unilip"
     name: "unilip_stage2_448_imagenet_from_scratch"
     output_dir: "unilip_stage2_448_imagenet_from_scratch"
     max_train_examples: 1_281_167    # ImageNet训练集大小
