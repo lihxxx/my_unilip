@@ -26,7 +26,7 @@ from torch.cuda.amp import autocast
 
 from .perceptual_loss import PerceptualLoss
 from .discriminator import NLayerDiscriminator
-from .distill_loss import DistillLoss, SemanticReconstructionLoss, SemanticKLLoss
+from .distill_loss import DistillLoss, SemanticKLLoss
 
 
 def hinge_d_loss(logits_real: torch.Tensor, logits_fake: torch.Tensor) -> torch.Tensor:
@@ -98,39 +98,41 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             logvar_init = loss_config.get("logvar_init", 0.0)
             self.logvar = nn.Parameter(torch.ones(size=()) * logvar_init, requires_grad=False)
         
-        # Distillation loss (optional, for stage2)
-        self.use_distill = False
-        distill_loss_path = loss_config.get("distill_loss", "")
-        self.distill_weight = loss_config.get("distill_weight", 0.0)
-        if distill_loss_path and self.distill_weight > 0.0:
-            self.use_distill = True
-            self.distill_loss = DistillLoss(distill_loss_path).eval()
-            print(f"Distillation loss enabled with weight {self.distill_weight}")
-        else:
-            self.distill_loss = None
-            print("Distillation loss disabled")
-
-        # Semantic reconstruction loss for PS-VAE
+        # Semantic AE config (PS-VAE)
         # Based on paper: https://arxiv.org/pdf/2512.17909
         self.use_semantic_ae = config.model.get("use_semantic_ae", False)
         self.semantic_recon_weight = loss_config.get("semantic_recon_weight", 1.0)
         self.semantic_kl_weight = loss_config.get("semantic_kl_weight", 1e-4)
         
-        if self.use_semantic_ae:
+        # Distillation loss (optional, for stage2)
+        # When semantic AE is enabled, distill_loss also computes semantic reconstruction loss
+        self.use_distill = False
+        distill_loss_path = loss_config.get("distill_loss", "")
+        self.distill_weight = loss_config.get("distill_weight", 0.0)
+        if distill_loss_path and self.distill_weight > 0.0:
+            self.use_distill = True
             semantic_l2_weight = loss_config.get("semantic_l2_weight", 1.0)
             semantic_cosine_weight = loss_config.get("semantic_cosine_weight", 0.5)
-            self.semantic_recon_loss = SemanticReconstructionLoss(
-                l2_weight=semantic_l2_weight,
-                cosine_weight=semantic_cosine_weight
-            )
-            self.semantic_kl_loss = SemanticKLLoss()
-            print(f"Semantic AE loss enabled: recon_weight={self.semantic_recon_weight}, "
-                  f"kl_weight={self.semantic_kl_weight}, l2_weight={semantic_l2_weight}, "
-                  f"cosine_weight={semantic_cosine_weight}")
+            self.distill_loss = DistillLoss(
+                distill_loss_path,
+                use_semantic_loss=self.use_semantic_ae,
+                semantic_l2_weight=semantic_l2_weight,
+                semantic_cosine_weight=semantic_cosine_weight
+            ).eval()
+            print(f"Distillation loss enabled with weight {self.distill_weight}")
+            if self.use_semantic_ae:
+                print(f"Semantic reconstruction loss enabled: recon_weight={self.semantic_recon_weight}, "
+                      f"l2_weight={semantic_l2_weight}, cosine_weight={semantic_cosine_weight}")
         else:
-            self.semantic_recon_loss = None
+            self.distill_loss = None
+            print("Distillation loss disabled")
+
+        # Semantic KL loss (separate from distill_loss)
+        if self.use_semantic_ae:
+            self.semantic_kl_loss = SemanticKLLoss()
+            print(f"Semantic KL loss enabled with weight {self.semantic_kl_weight}")
+        else:
             self.semantic_kl_loss = None
-            print("Semantic AE loss disabled")
 
         self.config = config
 
@@ -196,25 +198,26 @@ class ReconstructionLoss_Unified(torch.nn.Module):
         # Compute perceptual loss
         perceptual_loss = self.perceptual_loss(inputs_norm, reconstructions_norm).mean()
 
-        # Compute distillation loss if enabled
+        # Compute distillation loss and semantic reconstruction loss if enabled
         distill_loss = torch.tensor(0.0).to(inputs.device)
-        if self.use_distill and 'distill_feat' in extra_result_dict:
-            out_feat = extra_result_dict['distill_feat']
-            distill_loss = self.distill_loss(inputs_norm, out_feat)
-
-        # Compute semantic reconstruction loss if PS-VAE is enabled
         semantic_recon_loss = torch.tensor(0.0).to(inputs.device)
         semantic_kl_loss = torch.tensor(0.0).to(inputs.device)
         semantic_loss_dict = {}
-        if self.use_semantic_ae and 'semantic_original' in extra_result_dict:
-            # Semantic reconstruction loss (L2 + cosine similarity)
-            semantic_original = extra_result_dict['semantic_original']
-            semantic_reconstructed = extra_result_dict['semantic_reconstructed']
-            semantic_recon_loss, semantic_loss_dict = self.semantic_recon_loss(
-                semantic_original, semantic_reconstructed
-            )
+        
+        if self.use_distill and 'distill_feat' in extra_result_dict:
+            out_feat = extra_result_dict['distill_feat']
             
-            # Semantic KL loss
+            # Get semantic_reconstructed if PS-VAE is enabled
+            semantic_reconstructed = extra_result_dict.get('semantic_reconstructed', None)
+            
+            # Compute distillation loss (and semantic recon loss if enabled)
+            distill_loss, semantic_recon_loss, distill_loss_dict = self.distill_loss(
+                inputs_norm, out_feat, semantic_reconstructed
+            )
+            semantic_loss_dict.update(distill_loss_dict)
+        
+        # Compute semantic KL loss if PS-VAE is enabled
+        if self.use_semantic_ae and 'semantic_mean' in extra_result_dict:
             semantic_mean = extra_result_dict['semantic_mean']
             semantic_logvar = extra_result_dict['semantic_logvar']
             semantic_kl_loss = self.semantic_kl_loss(semantic_mean, semantic_logvar)

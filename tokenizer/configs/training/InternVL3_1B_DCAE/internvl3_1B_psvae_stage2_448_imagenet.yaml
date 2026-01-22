@@ -33,7 +33,7 @@ model:
     semantic_ae:
         latent_dim: 96      # Compact latent dimension (96 channels as in PS-VAE paper)
         num_layers: 3       # Number of transformer blocks in semantic encoder/decoder
-        num_heads: 12       # Number of attention heads (match ViT)
+        num_heads: 16       # Number of attention heads (2048 / 16 = 128 head_dim)
         mlp_ratio: 4.0      # MLP expansion ratio
     
     vq_model:

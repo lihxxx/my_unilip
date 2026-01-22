@@ -136,12 +136,25 @@ class SemanticKLLoss(torch.nn.Module):
 
 
 class DistillLoss(torch.nn.Module):
-    def __init__(self, model_name: str = "OpenGVLab/InternVL3-1B"):
+    """Distillation loss with optional semantic reconstruction loss for PS-VAE.
+    
+    Based on paper: https://arxiv.org/pdf/2512.17909
+    
+    The semantic reconstruction loss ensures that the semantic decoder can reconstruct
+    features that match the frozen reference encoder's output.
+    """
+    
+    def __init__(self, model_name: str = "OpenGVLab/InternVL3-1B",
+                 use_semantic_loss: bool = False,
+                 semantic_l2_weight: float = 1.0,
+                 semantic_cosine_weight: float = 0.5):
         """Initializes the Distill class.
 
         Args:
             model_name: A string, the path of the distillation loss model to use.
-
+            use_semantic_loss: Whether to compute semantic reconstruction loss.
+            semantic_l2_weight: Weight for L2 component in semantic loss.
+            semantic_cosine_weight: Weight for cosine similarity component.
         """
         super().__init__()
         model = AutoModel.from_pretrained(
@@ -155,43 +168,106 @@ class DistillLoss(torch.nn.Module):
 
         for param in self.parameters():
             param.requires_grad = False
+        
+        # Semantic loss config
+        self.use_semantic_loss = use_semantic_loss
+        self.semantic_l2_weight = semantic_l2_weight
+        self.semantic_cosine_weight = semantic_cosine_weight
     
-    def forward(self, x: torch.Tensor, out_feat: torch.Tensor):
-        """Computes the perceptual loss.
-
+    def _get_ref_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Extract features from frozen reference encoder.
+        
         Args:
-            input: A tensor of shape (B, C, H, W), the input image. Normalized to [0, 1].
-            target: A tensor of shape (B, C, H, W), the target image. Normalized to [0, 1].
-
+            x: Input image tensor (B, C, H, W), normalized to [0, 1].
+            
         Returns:
-            A scalar tensor, the perceptual loss.
+            Reference features (B, N, D).
         """
         # x is in [0,1], need imgnet normalize
-        # imgnetnorm
-        std = torch.tensor([0.229,0.224,0.225]).to(x.device)
-        mean = torch.tensor([0.485,0.456,0.406]).to(x.device)
+        std = torch.tensor([0.229, 0.224, 0.225]).to(x.device)
+        mean = torch.tensor([0.485, 0.456, 0.406]).to(x.device)
         mean = mean[None, :, None, None]
         std = std[None, :, None, None]
         x = (x - mean) / std
-        # Always in eval mode.
+        
+        # Always in eval mode
         self.eval()
-        loss = 0.
         with torch.no_grad():
             vit_embeds = self.ref_vit.embeddings(x)
             for idx, encoder_layer in enumerate(self.ref_vit.encoder.layers):
                 vit_embeds = encoder_layer(vit_embeds)
-            vit_embeds = vit_embeds[:,1:,:].contiguous().float()
+            vit_embeds = vit_embeds[:, 1:, :].contiguous().float()
             h = w = int(vit_embeds.shape[1] ** 0.5)
             vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
             vit_embeds = pixel_shuffle(vit_embeds)
             vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
             vit_embeds = self.ref_mlp1(vit_embeds)
-        target_feat = vit_embeds
+        
+        return vit_embeds
+    
+    def _compute_semantic_loss(self, 
+                                ref_feat: torch.Tensor, 
+                                recon_feat: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Compute semantic reconstruction loss.
+        
+        Args:
+            ref_feat: Reference features from frozen encoder (B, N, D).
+            recon_feat: Reconstructed features from semantic decoder (B, N, D).
+            
+        Returns:
+            total_loss: Combined semantic reconstruction loss.
+            loss_dict: Dictionary containing individual loss components.
+        """
+        # L2 reconstruction loss
+        l2_loss = F.mse_loss(recon_feat, ref_feat, reduction="mean")
+        
+        # Cosine similarity loss (1 - cosine_similarity)
+        ref_norm = F.normalize(ref_feat, p=2, dim=-1)
+        recon_norm = F.normalize(recon_feat, p=2, dim=-1)
+        cosine_sim = (ref_norm * recon_norm).sum(dim=-1)
+        cosine_loss = (1.0 - cosine_sim).mean()
+        
+        # Combined loss
+        total_loss = self.semantic_l2_weight * l2_loss + self.semantic_cosine_weight * cosine_loss
+        
+        loss_dict = {
+            'semantic_l2_loss': l2_loss.detach(),
+            'semantic_cosine_loss': cosine_loss.detach(),
+        }
+        
+        return total_loss, loss_dict
+    
+    def forward(self, x: torch.Tensor, out_feat: torch.Tensor, 
+                semantic_reconstructed: torch.Tensor = None) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Computes the distillation loss and optional semantic reconstruction loss.
 
-        distill_loss = F.mse_loss(
-                out_feat,
-                target_feat,
-                reduction="mean")
-        loss += distill_loss
+        Args:
+            x: Input image tensor (B, C, H, W), normalized to [0, 1].
+            out_feat: Output features from the trainable encoder (B, N, D).
+            semantic_reconstructed: Reconstructed features from semantic decoder (B, N, D).
+                                   Only used when use_semantic_loss=True.
 
-        return loss
+        Returns:
+            distill_loss: The distillation loss.
+            loss_dict: Dictionary containing all loss components.
+        """
+        # Get reference features from frozen encoder
+        ref_feat = self._get_ref_features(x)
+        
+        # Compute distillation loss (trainable encoder vs frozen encoder)
+        distill_loss = F.mse_loss(out_feat, ref_feat, reduction="mean")
+        
+        loss_dict = {
+            'distill_loss_raw': distill_loss.detach(),
+        }
+        
+        # Compute semantic reconstruction loss if enabled
+        semantic_recon_loss = torch.tensor(0.0).to(x.device)
+        if self.use_semantic_loss and semantic_reconstructed is not None:
+            semantic_recon_loss, semantic_loss_dict = self._compute_semantic_loss(
+                ref_feat, semantic_reconstructed
+            )
+            loss_dict.update(semantic_loss_dict)
+            loss_dict['semantic_recon_loss_raw'] = semantic_recon_loss.detach()
+
+        return distill_loss, semantic_recon_loss, loss_dict

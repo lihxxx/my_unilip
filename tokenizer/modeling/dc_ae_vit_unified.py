@@ -281,7 +281,7 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         semantic_ae_config = config.model.get("semantic_ae", {})
         self.semantic_latent_dim = semantic_ae_config.get("latent_dim", 96)  # Default 96 channels as in PS-VAE
         self.semantic_num_layers = semantic_ae_config.get("num_layers", 3)   # 3 transformer blocks
-        self.semantic_num_heads = semantic_ae_config.get("num_heads", 12)    # Match ViT heads
+        self.semantic_num_heads = semantic_ae_config.get("num_heads", 16)    # 2048 / 16 = 128 head_dim
         self.semantic_mlp_ratio = semantic_ae_config.get("mlp_ratio", 4.0)
         
         if self.use_semantic_ae:
@@ -440,21 +440,22 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         
         if self.use_semantic_ae:
             # PS-VAE style encoding
-            # f_h' = vit_embeds (high-dimensional features from representation encoder)
+            # f_h = vit_embeds (high-dimensional features from trainable encoder)
             f_h = vit_embeds  # (B, N, llm_hidden_size)
             
             # Semantic Encoder: f_h -> z (compact latent with KL regularization)
             z_semantic, z_mean, z_logvar = self.semantic_encoder(f_h)
             
             # Semantic Decoder: z -> f_h'' (reconstructed features)
+            # NOTE: f_h_recon should match the FROZEN ref encoder's features, not f_h
+            # The semantic reconstruction loss is computed in distill_loss.py using ref features
             f_h_recon = self.semantic_decoder(z_semantic)
             
             # Store semantic AE outputs for loss computation
-            result_dict['semantic_original'] = f_h          # Original features (for semantic loss)
+            # semantic_reconstructed will be compared with frozen ref encoder features in distill_loss
             result_dict['semantic_reconstructed'] = f_h_recon  # Reconstructed features (for semantic loss)
             result_dict['semantic_mean'] = z_mean           # Mean (for KL loss)
             result_dict['semantic_logvar'] = z_logvar       # Log variance (for KL loss)
-            result_dict['semantic_latent'] = z_semantic     # Latent (for visualization/debugging)
             
             # Project semantic latent to pixel decoder input
             latent_for_decoder = z_semantic

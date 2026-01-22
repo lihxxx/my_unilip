@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "unilip_psvae_stage2_224_imagenet"
-    output_dir: "checkpoints/unilip_psvae_stage2_224_imagenet"
+    name: "unilip_1b_psvae_224_IN_midC96"
+    output_dir: "checkpoints/unilip_1b_psvae_224_IN_midC96"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 5_000
     eval_every: 5_000
@@ -33,7 +33,7 @@ model:
     semantic_ae:
         latent_dim: 96      # Compact latent dimension (96 channels as in PS-VAE paper)
         num_layers: 3       # Number of transformer blocks in semantic encoder/decoder
-        num_heads: 12       # Number of attention heads (match ViT)
+        num_heads: 16       # Number of attention heads (2048 / 16 = 128 head_dim)
         mlp_ratio: 4.0      # MLP expansion ratio
     
     vq_model:
@@ -60,8 +60,8 @@ losses:
     # PS-VAE: Semantic reconstruction loss
     # Based on paper: semantic reconstruction loss combines L2 loss and cosine similarity loss
     semantic_recon_weight: 1.0      # Weight for semantic reconstruction loss
-    semantic_kl_weight: 1e-4        # Weight for KL divergence loss on semantic latent
-    semantic_l2_weight: 1.0         # Weight for L2 component in semantic loss
+    semantic_kl_weight: 1e-6        # Weight for KL divergence loss on semantic latent
+    semantic_l2_weight: 0.5         # Weight for L2 component in semantic loss
     semantic_cosine_weight: 0.5     # Weight for cosine similarity component
     
     # Other loss settings

@@ -16,7 +16,7 @@ export WORKSPACE="./"
 export TORCH_DISTRIBUTED_DEBUG="INFO"
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
-config_file=./configs/training/InternVL3_1B_DCAE/internvl3_1B_psvae_stage2_imagenet.yaml
+config_file=./configs/training/InternVL3_1B_DCAE/internvl3_1B_psvae_IN.yaml
 
 echo "Running UniLIP PS-VAE Stage 2 (ImageNet) on Node $RANK / $WORLD_SIZE (Master: $MASTER_ADDR:$MASTER_PORT)"
 
