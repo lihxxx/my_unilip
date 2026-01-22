@@ -31,7 +31,7 @@ losses:
     discriminator_weight: 0.1
     perceptual_loss: "lpips-convnext_s-1.0-0.1"
     perceptual_weight: 1.1
-    distill_loss: OpenGVLab/InternVL3-1B
+    distill_loss: /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B
     distill_weight: 1.0
     reconstruction_loss: "l2"
     reconstruction_weight: 1.0
