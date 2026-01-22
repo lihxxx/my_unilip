@@ -326,6 +326,8 @@ def train_one_epoch(config, logger, accelerator,
 
     # Check if this is stage2 training (has distillation loss)
     use_distill = config.losses.get("distill_weight", 0.0) > 0.0
+    # Check if semantic AE is enabled (PS-VAE)
+    use_semantic_ae = config.model.get("use_semantic_ae", False)
 
     autoencoder_logs = defaultdict(float)
     discriminator_logs = defaultdict(float)
@@ -447,6 +449,11 @@ def train_one_epoch(config, logger, accelerator,
                 # Add distillation loss if present
                 if use_distill and 'train/distill_loss' in autoencoder_logs:
                     log_msg += f"Distill Loss: {autoencoder_logs['train/distill_loss']:0.4f} "
+                
+                # Add semantic AE loss if present (PS-VAE)
+                if use_semantic_ae and 'train/semantic_recon_loss' in autoencoder_logs:
+                    log_msg += f"Semantic Recon: {autoencoder_logs['train/semantic_recon_loss']:0.4f} "
+                    log_msg += f"Semantic KL: {autoencoder_logs['train/semantic_kl_loss']:0.4f} "
                 
                 # Add discriminator info if training
                 if accelerator.unwrap_model(loss_module).should_discriminator_be_trained(global_step):

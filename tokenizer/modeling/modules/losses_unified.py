@@ -26,7 +26,7 @@ from torch.cuda.amp import autocast
 
 from .perceptual_loss import PerceptualLoss
 from .discriminator import NLayerDiscriminator
-from .distill_loss import DistillLoss
+from .distill_loss import DistillLoss, SemanticReconstructionLoss, SemanticKLLoss
 
 
 def hinge_d_loss(logits_real: torch.Tensor, logits_fake: torch.Tensor) -> torch.Tensor:
@@ -62,6 +62,8 @@ class ReconstructionLoss_Unified(torch.nn.Module):
         losses.reconstruction_loss: str - "l1" or "l2"
         losses.reconstruction_weight: float - Weight for reconstruction loss
         losses.kl_weight: float - Weight for KL loss (for VAE mode)
+        losses.semantic_recon_weight: float - Weight for semantic reconstruction loss (PS-VAE)
+        losses.semantic_kl_weight: float - Weight for semantic KL loss (PS-VAE)
     """
     
     def __init__(self, config):
@@ -107,6 +109,28 @@ class ReconstructionLoss_Unified(torch.nn.Module):
         else:
             self.distill_loss = None
             print("Distillation loss disabled")
+
+        # Semantic reconstruction loss for PS-VAE
+        # Based on paper: https://arxiv.org/pdf/2512.17909
+        self.use_semantic_ae = config.model.get("use_semantic_ae", False)
+        self.semantic_recon_weight = loss_config.get("semantic_recon_weight", 1.0)
+        self.semantic_kl_weight = loss_config.get("semantic_kl_weight", 1e-4)
+        
+        if self.use_semantic_ae:
+            semantic_l2_weight = loss_config.get("semantic_l2_weight", 1.0)
+            semantic_cosine_weight = loss_config.get("semantic_cosine_weight", 0.5)
+            self.semantic_recon_loss = SemanticReconstructionLoss(
+                l2_weight=semantic_l2_weight,
+                cosine_weight=semantic_cosine_weight
+            )
+            self.semantic_kl_loss = SemanticKLLoss()
+            print(f"Semantic AE loss enabled: recon_weight={self.semantic_recon_weight}, "
+                  f"kl_weight={self.semantic_kl_weight}, l2_weight={semantic_l2_weight}, "
+                  f"cosine_weight={semantic_cosine_weight}")
+        else:
+            self.semantic_recon_loss = None
+            self.semantic_kl_loss = None
+            print("Semantic AE loss disabled")
 
         self.config = config
 
@@ -178,6 +202,23 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             out_feat = extra_result_dict['distill_feat']
             distill_loss = self.distill_loss(inputs_norm, out_feat)
 
+        # Compute semantic reconstruction loss if PS-VAE is enabled
+        semantic_recon_loss = torch.tensor(0.0).to(inputs.device)
+        semantic_kl_loss = torch.tensor(0.0).to(inputs.device)
+        semantic_loss_dict = {}
+        if self.use_semantic_ae and 'semantic_original' in extra_result_dict:
+            # Semantic reconstruction loss (L2 + cosine similarity)
+            semantic_original = extra_result_dict['semantic_original']
+            semantic_reconstructed = extra_result_dict['semantic_reconstructed']
+            semantic_recon_loss, semantic_loss_dict = self.semantic_recon_loss(
+                semantic_original, semantic_reconstructed
+            )
+            
+            # Semantic KL loss
+            semantic_mean = extra_result_dict['semantic_mean']
+            semantic_logvar = extra_result_dict['semantic_logvar']
+            semantic_kl_loss = self.semantic_kl_loss(semantic_mean, semantic_logvar)
+
         # Compute discriminator loss
         generator_loss = torch.zeros((), device=inputs.device)
         discriminator_factor = self.discriminator_factor if self.should_discriminator_be_trained(global_step) else 0
@@ -202,6 +243,12 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 + self.distill_weight * distill_loss
                 + d_weight * discriminator_factor * generator_loss
             )
+            
+            # Add semantic AE loss if enabled
+            if self.use_semantic_ae:
+                total_loss = total_loss + self.semantic_recon_weight * semantic_recon_loss
+                total_loss = total_loss + self.semantic_kl_weight * semantic_kl_loss
+            
             loss_dict = dict(
                 total_loss=total_loss.clone().detach(),
                 reconstruction_loss=reconstruction_loss.detach(),
@@ -216,6 +263,14 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             )
             if self.use_distill:
                 loss_dict["distill_loss"] = (self.distill_weight * distill_loss).detach()
+            
+            # Add semantic AE loss to dict if enabled
+            if self.use_semantic_ae:
+                loss_dict["semantic_recon_loss"] = (self.semantic_recon_weight * semantic_recon_loss).detach()
+                loss_dict["semantic_kl_loss"] = (self.semantic_kl_weight * semantic_kl_loss).detach()
+                # Add detailed semantic loss components
+                for k, v in semantic_loss_dict.items():
+                    loss_dict[k] = v
                 
         elif self.quantize_mode == "vae":
             # VAE mode
@@ -234,6 +289,12 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 + self.kl_weight * kl_loss
                 + d_weight * discriminator_factor * generator_loss
             )
+            
+            # Add semantic AE loss if enabled
+            if self.use_semantic_ae:
+                total_loss = total_loss + self.semantic_recon_weight * semantic_recon_loss
+                total_loss = total_loss + self.semantic_kl_weight * semantic_kl_loss
+            
             loss_dict = dict(
                 total_loss=total_loss.clone().detach(),
                 reconstruction_loss=reconstruction_loss.detach(),
@@ -246,6 +307,14 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             )
             if self.use_distill:
                 loss_dict["distill_loss"] = (self.distill_weight * distill_loss).detach()
+            
+            # Add semantic AE loss to dict if enabled
+            if self.use_semantic_ae:
+                loss_dict["semantic_recon_loss"] = (self.semantic_recon_weight * semantic_recon_loss).detach()
+                loss_dict["semantic_kl_loss"] = (self.semantic_kl_weight * semantic_kl_loss).detach()
+                # Add detailed semantic loss components
+                for k, v in semantic_loss_dict.items():
+                    loss_dict[k] = v
         else:
             raise NotImplementedError(f"quantize_mode {self.quantize_mode} not supported")
 

@@ -1,4 +1,4 @@
-"""This file contains perceptual loss module using LPIPS and ConvNeXt-S.
+"""This file contains distillation and semantic reconstruction loss modules.
 
 Copyright (2024) Bytedance Ltd. and/or its affiliates
 
@@ -13,17 +13,25 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. 
 See the License for the specific language governing permissions and 
 limitations under the License. 
+
+References:
+    - PS-VAE: https://arxiv.org/pdf/2512.17909
+    - Semantic reconstruction loss combines L2 loss and cosine similarity loss
 """
 
 import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModel
 import os
+from typing import Dict, Tuple
+
+
 def mean_flat(x):
     """
     Take the mean over all non-batch dimensions.
     """
     return torch.mean(x, dim=list(range(1, len(x.size()))))
+
 
 def pixel_shuffle(x, scale_factor=0.5):
     n, w, h, c = x.size()
@@ -36,6 +44,96 @@ def pixel_shuffle(x, scale_factor=0.5):
                 int(c / (scale_factor * scale_factor)))
     x = x.permute(0, 2, 1, 3).contiguous()
     return x
+
+
+class SemanticReconstructionLoss(torch.nn.Module):
+    """Semantic Reconstruction Loss for PS-VAE.
+    
+    Based on paper: https://arxiv.org/pdf/2512.17909
+    
+    The semantic reconstruction loss combines:
+    1. L2 loss on features
+    2. Cosine similarity loss on features
+    
+    This encourages the encoder to maintain fine-grained details during 
+    the computation of strong semantic representations.
+    """
+    
+    def __init__(self, l2_weight: float = 1.0, cosine_weight: float = 0.5):
+        """Initialize SemanticReconstructionLoss.
+        
+        Args:
+            l2_weight: Weight for L2 reconstruction loss.
+            cosine_weight: Weight for cosine similarity loss.
+        """
+        super().__init__()
+        self.l2_weight = l2_weight
+        self.cosine_weight = cosine_weight
+        
+    def forward(self, 
+                original_feat: torch.Tensor, 
+                reconstructed_feat: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Compute semantic reconstruction loss.
+        
+        Args:
+            original_feat: Original features from representation encoder (B, N, D)
+            reconstructed_feat: Reconstructed features from semantic decoder (B, N, D)
+            
+        Returns:
+            total_loss: Combined semantic reconstruction loss
+            loss_dict: Dictionary containing individual loss components
+        """
+        # L2 reconstruction loss
+        l2_loss = F.mse_loss(reconstructed_feat, original_feat, reduction="mean")
+        
+        # Cosine similarity loss (1 - cosine_similarity)
+        # Normalize features along the last dimension
+        original_norm = F.normalize(original_feat, p=2, dim=-1)
+        reconstructed_norm = F.normalize(reconstructed_feat, p=2, dim=-1)
+        
+        # Compute cosine similarity and convert to loss
+        cosine_sim = (original_norm * reconstructed_norm).sum(dim=-1)  # (B, N)
+        cosine_loss = (1.0 - cosine_sim).mean()
+        
+        # Combined loss
+        total_loss = self.l2_weight * l2_loss + self.cosine_weight * cosine_loss
+        
+        loss_dict = {
+            'semantic_l2_loss': l2_loss.detach(),
+            'semantic_cosine_loss': cosine_loss.detach(),
+            'semantic_total_loss': total_loss.detach()
+        }
+        
+        return total_loss, loss_dict
+
+
+class SemanticKLLoss(torch.nn.Module):
+    """KL Divergence Loss for Semantic VAE.
+    
+    Based on PS-VAE paper: The latent is regularized by a KL divergence loss
+    following standard VAE practice.
+    """
+    
+    def __init__(self):
+        super().__init__()
+        
+    def forward(self, mean: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        """Compute KL divergence loss.
+        
+        KL(q(z|x) || p(z)) where p(z) = N(0, I)
+        
+        Args:
+            mean: Mean of the latent distribution (B, N, D)
+            logvar: Log variance of the latent distribution (B, N, D)
+            
+        Returns:
+            KL divergence loss
+        """
+        # KL divergence: -0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
+        kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp(), dim=-1)
+        kl_loss = kl_loss.mean()
+        return kl_loss
+
 
 class DistillLoss(torch.nn.Module):
     def __init__(self, model_name: str = "OpenGVLab/InternVL3-1B"):

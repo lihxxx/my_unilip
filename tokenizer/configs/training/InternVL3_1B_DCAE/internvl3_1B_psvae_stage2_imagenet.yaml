@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "unilip_stage2_224_imagenet_from_scratch"
-    output_dir: "checkpoints/unilip_stage2_224_imagenet_from_scratch"
+    name: "unilip_psvae_stage2_224_imagenet"
+    output_dir: "checkpoints/unilip_psvae_stage2_224_imagenet"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 5_000
     eval_every: 5_000
@@ -19,12 +19,23 @@ model:
     patch_size: 14
     mllm_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B"
     dc_ae_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers"
-    # Stage2_448 specific: load stage2 checkpoint
+    # Stage2 specific
     stage1_ckpt: ""
     freeze_encoder: False
     output_distill_feat: True
     disable_drop_path: True
     use_gradient_checkpoint: False
+    
+    # PS-VAE: Semantic AE configuration
+    # Based on paper: https://arxiv.org/pdf/2512.17909
+    # S-VAE maps high-dimensional features to compact latent space with KL regularization
+    use_semantic_ae: True
+    semantic_ae:
+        latent_dim: 96      # Compact latent dimension (96 channels as in PS-VAE paper)
+        num_layers: 3       # Number of transformer blocks in semantic encoder/decoder
+        num_heads: 12       # Number of attention heads (match ViT)
+        mlp_ratio: 4.0      # MLP expansion ratio
+    
     vq_model:
         quantize_mode: vae
 
@@ -37,14 +48,27 @@ losses:
     discriminator_weight: 0.1
     perceptual_loss: "lpips-convnext_s-1.0-0.1"
     perceptual_weight: 1.1
-    # Enable distillation
+    
+    # Distillation loss (for feature alignment with frozen encoder)
     distill_loss: /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B
     distill_weight: 1.0
+    
+    # Pixel reconstruction loss
     reconstruction_loss: "l2"
     reconstruction_weight: 1.0
+    
+    # PS-VAE: Semantic reconstruction loss
+    # Based on paper: semantic reconstruction loss combines L2 loss and cosine similarity loss
+    semantic_recon_weight: 1.0      # Weight for semantic reconstruction loss
+    semantic_kl_weight: 1e-4        # Weight for KL divergence loss on semantic latent
+    semantic_l2_weight: 1.0         # Weight for L2 component in semantic loss
+    semantic_cosine_weight: 0.5     # Weight for cosine similarity component
+    
+    # Other loss settings
     lecam_regularization_weight: 0.001
     kl_weight: 0.0
     logvar_init: 0.0
+
 
 dataset:
     params:
@@ -74,12 +98,14 @@ optimizer:
         use_encoder_lr_scale: True
         encoder_lr_scale: 0.1
 
+
 lr_scheduler:
     scheduler: "cosine"
     params:
         learning_rate: ${optimizer.params.learning_rate}
         warmup_steps: 3_000
         end_lr: 1e-4
+
 
 training:
     gradient_accumulation_steps: 1
@@ -94,4 +120,3 @@ training:
     max_train_steps: 200_000
     num_generated_images: 8
     max_grad_norm: 1.0
-
