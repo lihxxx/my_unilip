@@ -5,6 +5,7 @@ experiment:
     max_train_examples: 40_000_000
     save_every: 25_000
     eval_every: 1
+    eval_max_samples: -1             # 测试时全量评估，-1表示评估所有数据
     generate_every: 5_000
     log_every: 50
     log_grad_norm_every: 1_000

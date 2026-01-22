@@ -505,7 +505,12 @@ def train_one_epoch(config, logger, accelerator,
 
             # Evaluate reconstruction.
             if eval_dataloader is not None and (global_step + 1) % config.experiment.eval_every == 0:
-                logger.info(f"Computing metrics on the validation set.")
+                eval_max_samples = config.experiment.get("eval_max_samples",  500)
+                if eval_max_samples > 0:
+                    logger.info(f"Computing metrics on {eval_max_samples} validation samples.")
+                else:
+                    logger.info(f"Computing metrics on the full validation set.")
+                    
                 if config.training.get("use_ema", False):
                     ema_model.store(model.parameters())
                     ema_model.copy_to(model.parameters())
@@ -516,6 +521,7 @@ def train_one_epoch(config, logger, accelerator,
                         accelerator,
                         evaluator,
                         model_type=model_type,
+                        max_samples=eval_max_samples,
                     )
                     logger.info(
                         f"EMA EVALUATION "
@@ -536,6 +542,7 @@ def train_one_epoch(config, logger, accelerator,
                         accelerator,
                         evaluator,
                         model_type=model_type,
+                        max_samples=eval_max_samples,
                     )
 
                     logger.info(
@@ -568,11 +575,24 @@ def eval_reconstruction(
     accelerator,
     evaluator,
     model_type="titok",
+    max_samples=-1,
 ):
+    """Evaluate reconstruction quality.
+    
+    Args:
+        model: The model to evaluate.
+        eval_loader: DataLoader for evaluation data.
+        accelerator: Accelerator for distributed training.
+        evaluator: Evaluator object.
+        model_type: Type of the model.
+        max_samples: Maximum number of samples to evaluate. 
+                     If -1 or None, evaluate all samples. Default: -1.
+    """
     model.eval()
     evaluator.reset_metrics()
     local_model = accelerator.unwrap_model(model)
 
+    total_samples = 0
     for batch in eval_loader:
         images = batch["image"].to(
             accelerator.device, memory_format=torch.contiguous_format, non_blocking=True
@@ -588,6 +608,11 @@ def eval_reconstruction(
         # Quantize to uint8
         reconstructed_images = (torch.round((reconstructed_images+1)/2 * 255.0) - 127.5) / 127.5
         evaluator.update(original_images, reconstructed_images.squeeze(2), None)
+        
+        # Check if we've reached max_samples
+        total_samples += images.shape[0]
+        if max_samples is not None and max_samples > 0 and total_samples >= max_samples:
+            break
             
     model.train()
     return evaluator.result()

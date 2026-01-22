@@ -105,12 +105,20 @@ def main():
     if config.training.use_ema:
         ema_model.to(accelerator.device)
 
+    # Get max_samples for evaluation (default -1 means all samples)
+    eval_max_samples = config.experiment.get("eval_max_samples", -1)
+    if eval_max_samples > 0:
+        logger.info(f"Evaluating on {eval_max_samples} samples.")
+    else:
+        logger.info(f"Evaluating on full validation set.")
+    
     eval_scores = eval_reconstruction(
         model,
         eval_dataloader,
         accelerator,
         evaluator,
         model_type="titok",
+        max_samples=eval_max_samples,
     )
     logger.info(pprint.pformat(eval_scores))
 
