@@ -1,11 +1,11 @@
 experiment:
     project: "unilip"
-    name: "unilip_1b_psvae_224_IN_midC96"
-    output_dir: "checkpoints/unilip_1b_psvae_224_IN_midC96"
+    name: "unilip_1b_psvae_224_IN_midC32_kl"
+    output_dir: "checkpoints/unilip_1b_psvae_224_IN_midC32_kl"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 5_000
     eval_every: 5_000
-    eval_max_samples: 1000            # 训练时只评估500条数据，设为-1表示全量评估
+    eval_max_samples: -1            # 训练时只评估500条数据，设为-1表示全量评估
     generate_every: 1_000
     log_every: 50
     log_grad_norm_every: 500
@@ -31,7 +31,7 @@ model:
     # S-VAE maps high-dimensional features to compact latent space with KL regularization
     use_semantic_ae: True
     semantic_ae:
-        latent_dim: 96      # Compact latent dimension (96 channels as in PS-VAE paper)
+        latent_dim: 32      # Compact latent dimension (96 channels as in PS-VAE paper)
         num_layers: 3       # Number of transformer blocks in semantic encoder/decoder
         num_heads: 16       # Number of attention heads (2048 / 16 = 128 head_dim)
         mlp_ratio: 4.0      # MLP expansion ratio
@@ -42,7 +42,7 @@ model:
 
 losses:
     name: ReconstructionLoss_Unified
-    discriminator_start: 30_000
+    discriminator_start: 500_000
     quantizer_weight: 1.0
     discriminator_factor: 1.0
     discriminator_weight: 0.1
@@ -61,8 +61,8 @@ losses:
     # Based on paper: semantic reconstruction loss combines L2 loss and cosine similarity loss
     semantic_recon_weight: 1.0      # Weight for semantic reconstruction loss
     semantic_kl_weight: 1e-6        # Weight for KL divergence loss on semantic latent
-    semantic_l2_weight: 0.5         # Weight for L2 component in semantic loss
-    semantic_cosine_weight: 0.5     # Weight for cosine similarity component
+    semantic_l2_weight: 0.1         # Weight for L2 component in semantic loss
+    semantic_cosine_weight: 0.1     # Weight for cosine similarity component
     
     # Other loss settings
     lecam_regularization_weight: 0.001

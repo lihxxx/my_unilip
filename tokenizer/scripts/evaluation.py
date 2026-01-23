@@ -31,7 +31,7 @@ sys.path.append('.')
 from utils.logger import setup_logger
 import pprint
 
-from utils.train_utils_stage2 import (
+from utils.train_utils import (
     get_config, 
     create_model_and_loss_module,
     create_optimizer, create_lr_scheduler, create_dataloader,

@@ -81,6 +81,6 @@ def split_and_compress(folder_path, num_parts=5):
 
 # 使用示例
 json_file_path = './ShareGPT-4o-Image/text_to_image.json'
-output_folder = './'
+output_folder = './gen_sft'
 process_json(json_file_path, output_folder=output_folder)
 split_and_compress(output_folder, num_parts=5)

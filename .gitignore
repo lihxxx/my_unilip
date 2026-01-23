@@ -17,3 +17,6 @@ swanlog
 debug
 unilip_stage1/
 unilip_stage1_imagenet/
+wandb
+data
+unilip.egg-info

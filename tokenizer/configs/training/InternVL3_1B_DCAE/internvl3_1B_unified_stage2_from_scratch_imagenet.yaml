@@ -5,7 +5,7 @@ experiment:
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 5_000
     eval_every: 5_000
-    eval_max_samples: 1000            # 训练时只评估500条数据，设为-1表示全量评估
+    eval_max_samples: -1            # 训练时只评估500条数据，设为-1表示全量评估
     generate_every: 1_000
     log_every: 50
     log_grad_norm_every: 500
@@ -31,7 +31,7 @@ model:
 
 losses:
     name: ReconstructionLoss_Unified
-    discriminator_start: 30_000
+    discriminator_start: 500_000
     quantizer_weight: 1.0
     discriminator_factor: 1.0
     discriminator_weight: 0.1
