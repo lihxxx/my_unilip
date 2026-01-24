@@ -99,11 +99,11 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             logvar_init = loss_config.get("logvar_init", 0.0)
             self.logvar = nn.Parameter(torch.ones(size=()) * logvar_init, requires_grad=False)
         
-        # Semantic AE config (PS-VAE)
+        # Semantic AE config (PS-VAE, without KL)
         # Based on paper: https://arxiv.org/pdf/2512.17909
+        # Reference: vlvae_intervl_semae.py (simplified version without KL)
         self.use_semantic_ae = config.model.get("use_semantic_ae", False)
         self.semantic_recon_weight = loss_config.get("semantic_recon_weight", 1.0)
-        self.semantic_kl_weight = loss_config.get("semantic_kl_weight", 1e-4)
         
         # Dual stream config
         self.use_dual_stream = config.model.get("use_dual_stream", False)
@@ -142,12 +142,8 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             self.distill_loss = None
             print("Distillation loss disabled")
 
-        # Semantic KL loss (separate from distill_loss)
-        if self.use_semantic_ae:
-            self.semantic_kl_loss = SemanticKLLoss()
-            print(f"Semantic KL loss enabled with weight {self.semantic_kl_weight}")
-        else:
-            self.semantic_kl_loss = None
+        # Note: Semantic KL loss is removed (using simplified PS-VAE without KL)
+        self.semantic_kl_loss = None
 
         self.config = config
 
@@ -217,7 +213,6 @@ class ReconstructionLoss_Unified(torch.nn.Module):
         distill_loss = torch.tensor(0.0).to(inputs.device)
         semantic_recon_loss = torch.tensor(0.0).to(inputs.device)
         pixel_distill_loss = torch.tensor(0.0).to(inputs.device)
-        semantic_kl_loss = torch.tensor(0.0).to(inputs.device)
         semantic_loss_dict = {}
         
         if self.use_distill and 'distill_feat' in extra_result_dict:
@@ -234,12 +229,6 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 inputs_norm, out_feat, semantic_reconstructed, pixel_latent
             )
             semantic_loss_dict.update(distill_loss_dict)
-        
-        # Compute semantic KL loss if PS-VAE is enabled
-        if self.use_semantic_ae and 'semantic_mean' in extra_result_dict:
-            semantic_mean = extra_result_dict['semantic_mean']
-            semantic_logvar = extra_result_dict['semantic_logvar']
-            semantic_kl_loss = self.semantic_kl_loss(semantic_mean, semantic_logvar)
 
         # Compute discriminator loss
         generator_loss = torch.zeros((), device=inputs.device)
@@ -266,10 +255,9 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 + d_weight * discriminator_factor * generator_loss
             )
             
-            # Add semantic AE loss if enabled
+            # Add semantic AE loss if enabled (without KL)
             if self.use_semantic_ae:
                 total_loss = total_loss + self.semantic_recon_weight * semantic_recon_loss
-                total_loss = total_loss + self.semantic_kl_weight * semantic_kl_loss
             
             # Add pixel distillation loss if dual-stream is enabled
             if self.use_dual_stream and self.pixel_distill_weight > 0.0:
@@ -290,10 +278,9 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             if self.use_distill:
                 loss_dict["distill_loss"] = (self.distill_weight * distill_loss).detach()
             
-            # Add semantic AE loss to dict if enabled
+            # Add semantic AE loss to dict if enabled (without KL)
             if self.use_semantic_ae:
                 loss_dict["semantic_recon_loss"] = (self.semantic_recon_weight * semantic_recon_loss).detach()
-                loss_dict["semantic_kl_loss"] = (self.semantic_kl_weight * semantic_kl_loss).detach()
                 # Add detailed semantic loss components
                 for k, v in semantic_loss_dict.items():
                     loss_dict[k] = v
@@ -324,10 +311,9 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 + d_weight * discriminator_factor * generator_loss
             )
             
-            # Add semantic AE loss if enabled
+            # Add semantic AE loss if enabled (without KL)
             if self.use_semantic_ae:
                 total_loss = total_loss + self.semantic_recon_weight * semantic_recon_loss
-                total_loss = total_loss + self.semantic_kl_weight * semantic_kl_loss
             
             # Add pixel distillation loss if dual-stream is enabled
             if self.use_dual_stream and self.pixel_distill_weight > 0.0:
@@ -346,10 +332,9 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             if self.use_distill:
                 loss_dict["distill_loss"] = (self.distill_weight * distill_loss).detach()
             
-            # Add semantic AE loss to dict if enabled
+            # Add semantic AE loss to dict if enabled (without KL)
             if self.use_semantic_ae:
                 loss_dict["semantic_recon_loss"] = (self.semantic_recon_weight * semantic_recon_loss).detach()
-                loss_dict["semantic_kl_loss"] = (self.semantic_kl_weight * semantic_kl_loss).detach()
                 # Add detailed semantic loss components
                 for k, v in semantic_loss_dict.items():
                     loss_dict[k] = v

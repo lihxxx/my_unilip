@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "unilip_1b_psvae_224_IN_midC32_kl"
-    output_dir: "checkpoints/unilip_1b_psvae_224_IN_midC32_kl"
+    name: "unilip_1b_semae63_SemR0.1_224_IN"
+    output_dir: "checkpoints/unilip_1b_semae63_SemR0.1_224_IN"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 5_000
     eval_every: 5_000
@@ -26,15 +26,17 @@ model:
     disable_drop_path: True
     use_gradient_checkpoint: False
     
-    # PS-VAE: Semantic AE configuration
-    # Based on paper: https://arxiv.org/pdf/2512.17909
-    # S-VAE maps high-dimensional features to compact latent space with KL regularization
+    # PS-VAE: Semantic AE configuration (simplified, without KL)
+    # Reference: vlvae_intervl_semae.py
     use_semantic_ae: True
     semantic_ae:
-        latent_dim: 32      # Compact latent dimension (96 channels as in PS-VAE paper)
-        num_layers: 3       # Number of transformer blocks in semantic encoder/decoder
-        num_heads: 16       # Number of attention heads (2048 / 16 = 128 head_dim)
-        mlp_ratio: 4.0      # MLP expansion ratio
+        latent_dim: 32      # Compact latent dimension
+        encoder:
+            num_layers: 6   # Number of transformer blocks in semantic encoder
+            num_heads: 16    # Number of attention heads
+        decoder:
+            num_layers: 3   # Number of transformer blocks in semantic decoder
+            num_heads: 16    # Number of attention heads
     
     vq_model:
         quantize_mode: vae
@@ -57,12 +59,11 @@ losses:
     reconstruction_loss: "l2"
     reconstruction_weight: 1.0
     
-    # PS-VAE: Semantic reconstruction loss
-    # Based on paper: semantic reconstruction loss combines L2 loss and cosine similarity loss
-    semantic_recon_weight: 1.0      # Weight for semantic reconstruction loss
-    semantic_kl_weight: 1e-6        # Weight for KL divergence loss on semantic latent
-    semantic_l2_weight: 0.1         # Weight for L2 component in semantic loss
-    semantic_cosine_weight: 0.1     # Weight for cosine similarity component
+    # PS-VAE: Semantic reconstruction loss (without KL)
+    # semantic reconstruction loss combines L2 loss and cosine similarity loss
+    semantic_recon_weight: 0.1      # Weight for semantic reconstruction loss
+    semantic_l2_weight: 1.0         # Weight for L2 component in semantic loss
+    semantic_cosine_weight: 1.0     # Weight for cosine similarity component
     
     # Other loss settings
     lecam_regularization_weight: 0.001

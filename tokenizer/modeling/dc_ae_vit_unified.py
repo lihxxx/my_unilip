@@ -31,79 +31,73 @@ from diffusers.models import AutoencoderDC
 from modeling.modules.base_model import BaseModel
 
 
-class SemanticTransformerBlock(nn.Module):
+class TransformerBlock(nn.Module):
     """Transformer block for Semantic Encoder/Decoder.
     
     Based on PS-VAE paper: The encoder and decoder share a symmetric design with 
     Transformer blocks inherited from the representation encoder.
     """
     
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, dropout=0.0):
+    def __init__(self, hidden_size, num_heads=8, mlp_ratio=4.0):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
-        self.head_dim = hidden_size // num_heads
         
-        # Self-attention
+        # Self-attention with pre-norm
         self.norm1 = nn.LayerNorm(hidden_size, eps=1e-6)
         self.attn = nn.MultiheadAttention(
             embed_dim=hidden_size,
             num_heads=num_heads,
-            dropout=dropout,
             batch_first=True
         )
         
-        # MLP
+        # MLP with pre-norm
         self.norm2 = nn.LayerNorm(hidden_size, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         self.mlp = nn.Sequential(
             nn.Linear(hidden_size, mlp_hidden_dim),
             nn.GELU(),
-            nn.Dropout(dropout),
             nn.Linear(mlp_hidden_dim, hidden_size),
-            nn.Dropout(dropout)
         )
         
     def forward(self, x):
-        # Self-attention with residual
+        # Self-attention with residual (pre-norm)
         x_norm = self.norm1(x)
         attn_out, _ = self.attn(x_norm, x_norm, x_norm)
         x = x + attn_out
         
-        # MLP with residual
+        # MLP with residual (pre-norm)
         x = x + self.mlp(self.norm2(x))
         return x
 
 
 class SemanticEncoder(nn.Module):
-    """Semantic Encoder for PS-VAE.
+    """Semantic Encoder (S-Enc) for PS-VAE.
     
     Maps high-dimensional representation features to a compact latent space.
-    Uses Transformer blocks + MLP projection for dimensionality adjustment.
+    Reference: vlvae_intervl_semae.py
+    
+    - Input: [B, N, D] high-dimensional features (e.g., D=2048 from InternVL3)
+    - Output: [B, C, H, W] compact latent (e.g., C=latent_dim, H=W=8)
     """
     
-    def __init__(self, input_dim, latent_dim, num_layers=3, num_heads=12, mlp_ratio=4.0):
+    def __init__(self, input_dim, latent_dim, num_layers=3, num_heads=8):
         super().__init__()
         self.input_dim = input_dim
         self.latent_dim = latent_dim
         
-        # Transformer blocks
-        self.transformer_blocks = nn.ModuleList([
-            SemanticTransformerBlock(input_dim, num_heads, mlp_ratio)
+        # Transformer blocks inherited from representation encoder
+        self.blocks = nn.ModuleList([
+            TransformerBlock(input_dim, num_heads=num_heads)
             for _ in range(num_layers)
         ])
         
-        # MLP projection to latent space (with mean and logvar for VAE)
-        self.proj_norm = nn.LayerNorm(input_dim, eps=1e-6)
-        self.proj_mean = nn.Sequential(
-            nn.Linear(input_dim, input_dim // 2),
+        # MLP projection layer for dimensionality adjustment
+        self.proj = nn.Sequential(
+            nn.LayerNorm(input_dim),
+            nn.Linear(input_dim, latent_dim),
             nn.GELU(),
-            nn.Linear(input_dim // 2, latent_dim)
-        )
-        self.proj_logvar = nn.Sequential(
-            nn.Linear(input_dim, input_dim // 2),
-            nn.GELU(),
-            nn.Linear(input_dim // 2, latent_dim)
+            nn.Linear(latent_dim, latent_dim),
         )
         
     def forward(self, x):
@@ -111,71 +105,72 @@ class SemanticEncoder(nn.Module):
         Args:
             x: (B, N, input_dim) - input features from representation encoder
         Returns:
-            z: (B, N, latent_dim) - latent representation
-            mean: (B, N, latent_dim) - mean of the latent distribution
-            logvar: (B, N, latent_dim) - log variance of the latent distribution
+            z: (B, latent_dim, H, W) - latent representation in spatial format
         """
         # Pass through transformer blocks
-        for block in self.transformer_blocks:
+        for block in self.blocks:
             x = block(x)
         
-        # Project to latent space
-        x = self.proj_norm(x)
-        mean = self.proj_mean(x)
-        logvar = self.proj_logvar(x)
+        # MLP projection to latent space
+        x = self.proj(x)  # [B, N, latent_dim]
         
-        # Reparameterization trick
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        z = mean + eps * std
+        # Reshape to spatial format [B, N, C] -> [B, C, H, W]
+        B, N, C = x.shape
+        H = W = int(math.sqrt(N))
+        z = x.permute(0, 2, 1).contiguous().view(B, C, H, W)
         
-        return z, mean, logvar
+        return z
 
 
 class SemanticDecoder(nn.Module):
-    """Semantic Decoder for PS-VAE.
+    """Semantic Decoder (S-Dec) for PS-VAE.
     
     Reconstructs high-dimensional features from compact latent space.
     Symmetric design with Semantic Encoder.
+    Reference: vlvae_intervl_semae.py
+    
+    - Input: [B, C, H, W] compact latent (e.g., C=latent_dim, H=W=8)
+    - Output: [B, N, D] reconstructed features (e.g., D=2048)
     """
     
-    def __init__(self, latent_dim, output_dim, num_layers=3, num_heads=12, mlp_ratio=4.0):
+    def __init__(self, latent_dim, output_dim, num_layers=3, num_heads=8):
         super().__init__()
         self.latent_dim = latent_dim
         self.output_dim = output_dim
         
-        # MLP projection from latent space
-        self.proj_up = nn.Sequential(
-            nn.Linear(latent_dim, output_dim // 2),
+        # MLP projection layer for dimensionality adjustment (symmetric with encoder)
+        self.proj_in = nn.Sequential(
+            nn.Linear(latent_dim, output_dim),
             nn.GELU(),
-            nn.Linear(output_dim // 2, output_dim)
+            nn.Linear(output_dim, output_dim),
+            nn.LayerNorm(output_dim),
         )
         
-        # Transformer blocks
-        self.transformer_blocks = nn.ModuleList([
-            SemanticTransformerBlock(output_dim, num_heads, mlp_ratio)
+        # Transformer blocks inherited from representation encoder (symmetric with encoder)
+        self.blocks = nn.ModuleList([
+            TransformerBlock(output_dim, num_heads=num_heads)
             for _ in range(num_layers)
         ])
-        
-        # Final normalization
-        self.final_norm = nn.LayerNorm(output_dim, eps=1e-6)
         
     def forward(self, z):
         """
         Args:
-            z: (B, N, latent_dim) - latent representation
+            z: (B, latent_dim, H, W) - latent representation in spatial format
         Returns:
-            x_recon: (B, N, output_dim) - reconstructed features
+            feat: (B, N, output_dim) - reconstructed features
         """
-        # Project up to feature dimension
-        x = self.proj_up(z)
+        B, C, H, W = z.shape
+        # Reshape to sequence [B, C, H, W] -> [B, N, C]
+        x = z.view(B, C, H * W).permute(0, 2, 1).contiguous()  # [B, N, C]
+        
+        # MLP projection to feature dim
+        x = self.proj_in(x)  # [B, N, output_dim]
         
         # Pass through transformer blocks
-        for block in self.transformer_blocks:
+        for block in self.blocks:
             x = block(x)
         
-        x_recon = self.final_norm(x)
-        return x_recon
+        return x
 
 
 def pixel_shuffle(x, scale_factor=0.5):
@@ -282,9 +277,16 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         # S-VAE maps high-dimensional unconstrained feature space to compact latent space
         semantic_ae_config = config.model.get("semantic_ae", {})
         self.semantic_latent_dim = semantic_ae_config.get("latent_dim", 96)  # Default 96 channels as in PS-VAE
-        self.semantic_num_layers = semantic_ae_config.get("num_layers", 3)   # 3 transformer blocks
-        self.semantic_num_heads = semantic_ae_config.get("num_heads", 16)    # 2048 / 16 = 128 head_dim
-        self.semantic_mlp_ratio = semantic_ae_config.get("mlp_ratio", 4.0)
+        
+        # Encoder config
+        encoder_config = semantic_ae_config.get("encoder", {})
+        self.semantic_enc_num_layers = encoder_config.get("num_layers", 3)
+        self.semantic_enc_num_heads = encoder_config.get("num_heads", 8)
+        
+        # Decoder config
+        decoder_config = semantic_ae_config.get("decoder", {})
+        self.semantic_dec_num_layers = decoder_config.get("num_layers", 3)
+        self.semantic_dec_num_heads = decoder_config.get("num_heads", 8)
         
         # Dual stream config
         dual_stream_config = config.model.get("dual_stream", {})
@@ -352,25 +354,23 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
                   
         elif self.use_semantic_ae:
             # Build Semantic Encoder and Decoder (PS-VAE style)
-            # The encoder and decoder share a symmetric design with Transformer blocks
-            # inherited from the representation encoder and MLP projection layer
+            # Reference: vlvae_intervl_semae.py
+            # Encoder and Decoder can have different configurations
             self.semantic_encoder = SemanticEncoder(
                 input_dim=llm_hidden_size,
                 latent_dim=self.semantic_latent_dim,
-                num_layers=self.semantic_num_layers,
-                num_heads=self.semantic_num_heads,
-                mlp_ratio=self.semantic_mlp_ratio
+                num_layers=self.semantic_enc_num_layers,
+                num_heads=self.semantic_enc_num_heads
             )
             self.semantic_decoder = SemanticDecoder(
                 latent_dim=self.semantic_latent_dim,
                 output_dim=llm_hidden_size,
-                num_layers=self.semantic_num_layers,
-                num_heads=self.semantic_num_heads,
-                mlp_ratio=self.semantic_mlp_ratio
+                num_layers=self.semantic_dec_num_layers,
+                num_heads=self.semantic_dec_num_heads
             )
             
             # Build projection layers (from semantic latent to VAE decoder input)
-            # Use ResBlocks and MLP similar to original design
+            # semantic_latent_dim -> 32 for DC-AE decoder
             down_blocks = []
             for i in range(3):
                 down_blocks.append(ResBlock(self.semantic_latent_dim))
@@ -381,8 +381,9 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
                 nn.GELU(),
                 nn.Linear(32, 32),
             )
-            print(f"Semantic AE enabled with latent_dim={self.semantic_latent_dim}, "
-                  f"num_layers={self.semantic_num_layers}, num_heads={self.semantic_num_heads}")
+            print(f"Semantic AE enabled with latent_dim={self.semantic_latent_dim}")
+            print(f"  Encoder: num_layers={self.semantic_enc_num_layers}, num_heads={self.semantic_enc_num_heads}")
+            print(f"  Decoder: num_layers={self.semantic_dec_num_layers}, num_heads={self.semantic_dec_num_heads}")
         else:
             # Original design: Direct projection from llm_hidden_size to 32
             down_blocks = []
@@ -537,29 +538,31 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
             latent_for_decoder = self.fusion_layer(fused_latent)  # (B, N, 32)
             
         elif self.use_semantic_ae:
-            # PS-VAE style encoding
+            # PS-VAE style encoding (without KL, reference: vlvae_intervl_semae.py)
             # f_h = vit_embeds (high-dimensional features from trainable encoder)
             f_h = vit_embeds  # (B, N, llm_hidden_size)
             
-            # Semantic Encoder: f_h -> z (compact latent with KL regularization)
-            z_semantic, z_mean, z_logvar = self.semantic_encoder(f_h)
+            # Semantic Encoder: f_h -> z_spatial (compact latent in spatial format)
+            z_spatial = self.semantic_encoder(f_h)  # (B, latent_dim, H, W)
             
-            # Semantic Decoder: z -> f_h'' (reconstructed features)
-            # NOTE: f_h_recon should match the FROZEN ref encoder's features, not f_h
+            # Semantic Decoder: z_spatial -> f_h_recon (reconstructed features)
+            # NOTE: f_h_recon should match the FROZEN ref encoder's features
             # The semantic reconstruction loss is computed in distill_loss.py using ref features
-            f_h_recon = self.semantic_decoder(z_semantic)
+            f_h_recon = self.semantic_decoder(z_spatial)  # (B, N, llm_hidden_size)
             
             # Store semantic AE outputs for loss computation
             # semantic_reconstructed will be compared with frozen ref encoder features in distill_loss
             result_dict['semantic_reconstructed'] = f_h_recon  # Reconstructed features (for semantic loss)
-            result_dict['semantic_mean'] = z_mean           # Mean (for KL loss)
-            result_dict['semantic_logvar'] = z_logvar       # Log variance (for KL loss)
             
             # Project semantic latent to pixel decoder input
-            latent_for_decoder = z_semantic
+            # Reshape z_spatial from (B, C, H, W) to (B, N, C) for down_blocks
+            B, C, H, W = z_spatial.shape
+            z_seq = z_spatial.view(B, C, H * W).permute(0, 2, 1).contiguous()  # (B, N, latent_dim)
+            
+            latent_for_decoder = z_seq
             for block in self.down_blocks:
                 latent_for_decoder = block(latent_for_decoder)
-            latent_for_decoder = self.down_mlp(latent_for_decoder)
+            latent_for_decoder = self.down_mlp(latent_for_decoder)  # (B, N, 32)
         else:
             # Original design: direct projection
             latent_for_decoder = vit_embeds

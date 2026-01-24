@@ -292,7 +292,7 @@ class DistillLoss(torch.nn.Module):
     
     def _compute_pixel_distill_loss(self, 
                                      ref_pixel_feat: torch.Tensor, 
-                                     pixel_latent: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+                                     pixel_latent: torch.Tensor) -> torch.Tensor:
         """Compute pixel distillation loss.
         
         Args:
@@ -301,15 +301,9 @@ class DistillLoss(torch.nn.Module):
             
         Returns:
             pixel_distill_loss: MSE loss between ref and predicted pixel features.
-            loss_dict: Dictionary containing loss components.
         """
         pixel_distill_loss = F.mse_loss(pixel_latent, ref_pixel_feat, reduction="mean")
-        
-        loss_dict = {
-            'pixel_distill_loss_raw': pixel_distill_loss.detach(),
-        }
-        
-        return pixel_distill_loss, loss_dict
+        return pixel_distill_loss
     
     def forward(self, x: torch.Tensor, out_feat: torch.Tensor, 
                 semantic_reconstructed: torch.Tensor = None,
@@ -347,15 +341,11 @@ class DistillLoss(torch.nn.Module):
                 ref_feat, semantic_reconstructed
             )
             loss_dict.update(semantic_loss_dict)
-            loss_dict['semantic_recon_loss_raw'] = semantic_recon_loss.detach()
         
         # Compute pixel distillation loss if enabled
         pixel_distill_loss = torch.tensor(0.0).to(x.device)
         if self.use_pixel_distill and pixel_latent is not None:
             ref_pixel_feat = self._get_pixel_ref_features(x)
-            pixel_distill_loss, pixel_loss_dict = self._compute_pixel_distill_loss(
-                ref_pixel_feat, pixel_latent
-            )
-            loss_dict.update(pixel_loss_dict)
+            pixel_distill_loss = self._compute_pixel_distill_loss(ref_pixel_feat, pixel_latent)
 
         return distill_loss, semantic_recon_loss, pixel_distill_loss, loss_dict
