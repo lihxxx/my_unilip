@@ -1,22 +1,24 @@
 #!/bin/bash
-export WANDB_API_KEY=3ed65eb52edcc37a5e278a82dd874b44d4ffadb7
+unset WANDB_DISABLED
+
+export WANDB_API_KEY="3ed65eb52edcc37a5e278a82dd874b44d4ffadb7"
 export WANDB_PROJECT=unilip_umm
-export OUTPUT_FOLDER=../results/1b_stage3
-export EDIT_IMG_FOLDER=../data/edit_sft
-export GEN_IMG_FOLDER=../data/gen_sft
+export WANDB_NAME=unilip_intern_vl_1b_sft
+export OUTPUT_FOLDER=/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/results/${WANDB_NAME}
+export EDIT_IMG_FOLDER=/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/data/edit_sft
+export GEN_IMG_FOLDER=/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/data/gen_sft
+
 
 # single node
-# torchrun --nproc_per_node=4 --master_port=29506 
 # torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port=$MASTER_PORT --master_addr=$MASTER_ADDR \
-
 torchrun --nproc_per_node=2 --master_port=29506 \
     unilip/train/train_stage3.py \
-    --deepspeed ../deepspeed_scripts/zero0.json \
+    --deepspeed /mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/deepspeed_scripts/zero0.json \
     --model_name_or_path /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/UniLIP-1B  \
     --unilip_path /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/UniLIP/1b_unilip.pth \
     --unilip_factor 10.6 \
     --mllm_path /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B \
-    --mllm_hf_path OpenGVLab/InternVL3-1B-hf \
+    --mllm_hf_path /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B-hf \
     --vae_path /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers \
     --dit_path /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/Sana_600M_512px_diffusers \
     --version internvl \
@@ -51,7 +53,7 @@ torchrun --nproc_per_node=2 --master_port=29506 \
     --n_query 256 \
     --n_und_query 0 \
     --report_to wandb \
-    --run_name unilip_intern_vl_1b_sft \
+    --run_name ${WANDB_NAME} \
     --fix_dit False \
     --fix_connect False \
     --fix_llm True \
