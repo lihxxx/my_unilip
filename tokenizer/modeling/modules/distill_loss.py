@@ -264,11 +264,13 @@ class DistillLoss(torch.nn.Module):
         Returns:
             Reference pixel features (B, N, 32) reshaped from (B, 32, H', W').
         """
-        # DC-AE encoder expects input in [0, 1] range
+        # DC-AE encoder expects input in [-1, 1] range, convert from [0, 1]
+        x_dcae = x * 2 - 1  # [0, 1] -> [-1, 1]
+        
         self.eval()
         with torch.no_grad():
             # DC-AE encoder outputs (B, 32, H', W') where H'=W'=7 for 224x224 input
-            pixel_feat = self.ref_dc_ae_encoder(x)  # (B, 32, 7, 7)
+            pixel_feat = self.ref_dc_ae_encoder(x_dcae)  # (B, 32, 7, 7)
             
             # Interpolate to match pixel_latent spatial size (8x8 = 64 tokens)
             # pixel_latent comes from ViT (16x16) + pixel_shuffle -> 8x8
