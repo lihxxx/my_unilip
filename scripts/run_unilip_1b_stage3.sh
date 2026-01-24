@@ -1,20 +1,22 @@
 #!/bin/bash
-export OUTPUT_FOLDER=../work_dirs/1b_stage3
+export OUTPUT_FOLDER=../results/1b_stage3
 export EDIT_IMG_FOLDER=../data/edit_sft
 export GEN_IMG_FOLDER=../data/gen_sft
 
 # single node
 # torchrun --nproc_per_node=4 --master_port=29506 
-torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port=$MASTER_PORT --master_addr=$MASTER_ADDR \
+# torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port=$MASTER_PORT --master_addr=$MASTER_ADDR \
+
+torchrun --nproc_per_node=2 --master_port=29506 
     unilip/train/train_stage3.py \
     --deepspeed ../deepspeed_scripts/zero0.json \
-    --model_name_or_path ../work_dirs/1b_stage2/checkpoint-xxx  \
-    --unilip_path ../tokenizer_ckpt/1b_unilip.pth \
+    --model_name_or_path /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/UniLIP-1B  \
+    --unilip_path /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/UniLIP/1b_unilip.pth \
     --unilip_factor 10.6 \
-    --mllm_path OpenGVLab/InternVL3-1B \
+    --mllm_path /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B \
     --mllm_hf_path OpenGVLab/InternVL3-1B-hf \
-    --vae_path mit-han-lab/dc-ae-f32c32-sana-1.1-diffusers \
-    --dit_path Efficient-Large-Model/Sana_600M_512px_diffusers \
+    --vae_path /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers \
+    --dit_path /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/Sana_600M_512px_diffusers \
     --version internvl \
     --data_type "mix" \
     --gen_image_folder ${GEN_IMG_FOLDER} \
