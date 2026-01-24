@@ -1,4 +1,6 @@
 #!/bin/bash
+export WANDB_API_KEY=3ed65eb52edcc37a5e278a82dd874b44d4ffadb7
+export WANDB_PROJECT=unilip_umm
 export OUTPUT_FOLDER=../results/1b_stage3
 export EDIT_IMG_FOLDER=../data/edit_sft
 export GEN_IMG_FOLDER=../data/gen_sft
@@ -48,8 +50,8 @@ torchrun --nproc_per_node=2 --master_port=29506
     --lazy_preprocess True \
     --n_query 256 \
     --n_und_query 0 \
-    --report_to none \
-    --run_name unilip_intern_vl_1b \
+    --report_to wandb \
+    --run_name unilip_intern_vl_1b_sft \
     --fix_dit False \
     --fix_connect False \
     --fix_llm True \
