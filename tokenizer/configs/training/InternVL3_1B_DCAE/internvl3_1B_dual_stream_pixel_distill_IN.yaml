@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "unilip_1b_dual_stream_224_IN"
-    output_dir: "checkpoints/unilip_1b_dual_stream_224_IN"
+    name: "unilip_1b_dual_stream_pixel_distill_224_IN"
+    output_dir: "checkpoints/unilip_1b_dual_stream_pixel_distill_224_IN"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 5_000
     eval_every: 5_000
@@ -26,10 +26,10 @@ model:
     disable_drop_path: True
     use_gradient_checkpoint: False
     
-    # Dual Stream configuration
+    # Dual Stream configuration with Pixel Distillation
     # Stream 1 (Semantic): vit_embeds -> TransformerEncoder -> semantic_feat (for distill_loss)
     #                      -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
-    # Stream 2 (Pixel): vit_embeds -> down_blocks -> down_mlp -> 32-dim
+    # Stream 2 (Pixel): vit_embeds -> down_blocks -> down_mlp -> 32-dim (for pixel_distill_loss)
     # Fusion: concat(32, 32) -> 64-dim -> fusion_layer -> 32-dim
     use_dual_stream: True
     use_semantic_ae: False
@@ -52,10 +52,14 @@ losses:
     perceptual_loss: "lpips-convnext_s-1.0-0.1"
     perceptual_weight: 1.1
     
-    # Distillation loss (for feature alignment with frozen encoder)
+    # Semantic Distillation loss (for feature alignment with frozen encoder)
     # In dual-stream mode, semantic_feat is used for distillation instead of vit_embeds
     distill_loss: /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B
     distill_weight: 1.0
+    
+    # Pixel Distillation loss (for pixel stream alignment with frozen DC-AE encoder)
+    # pixel_latent (32-dim) is compared with DC-AE encoder output
+    pixel_distill_weight: 1.0
     
     # Pixel reconstruction loss
     reconstruction_loss: "l2"

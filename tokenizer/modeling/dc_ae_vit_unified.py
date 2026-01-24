@@ -515,7 +515,7 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
             semantic_feat = self.semantic_transformer(vit_embeds)  # (B, N, llm_hidden_size)
             
             # Use semantic_feat for distillation loss (replaces vit_embeds)
-            distill_output = semantic_feat
+            distill_output = semantic_feat.clone()
             
             # Semantic stream: semantic_feat -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
             semantic_latent = semantic_feat
@@ -528,6 +528,9 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
             for block in self.down_blocks:
                 pixel_latent = block(pixel_latent)
             pixel_latent = self.down_mlp(pixel_latent)  # (B, N, 32)
+            
+            # Store pixel_latent for pixel distillation loss
+            result_dict['pixel_latent'] = pixel_latent.clone()
             
             # Fusion: concat(semantic_latent, pixel_latent) -> fusion_layer -> 32-dim
             fused_latent = torch.cat([semantic_latent, pixel_latent], dim=-1)  # (B, N, 64)

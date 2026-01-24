@@ -22,8 +22,10 @@ References:
 import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModel
+from diffusers.models import AutoencoderDC
+import math
 import os
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 
 
 def mean_flat(x):
@@ -142,12 +144,16 @@ class DistillLoss(torch.nn.Module):
     
     The semantic reconstruction loss ensures that the semantic decoder can reconstruct
     features that match the frozen reference encoder's output.
+    
+    For dual-stream mode, also supports pixel distillation loss using DC-AE encoder.
     """
     
     def __init__(self, model_name: str = "OpenGVLab/InternVL3-1B",
                  use_semantic_loss: bool = False,
                  semantic_l2_weight: float = 1.0,
-                 semantic_cosine_weight: float = 0.5):
+                 semantic_cosine_weight: float = 0.5,
+                 use_pixel_distill: bool = False,
+                 dc_ae_path: Optional[str] = None):
         """Initializes the Distill class.
 
         Args:
@@ -155,6 +161,8 @@ class DistillLoss(torch.nn.Module):
             use_semantic_loss: Whether to compute semantic reconstruction loss.
             semantic_l2_weight: Weight for L2 component in semantic loss.
             semantic_cosine_weight: Weight for cosine similarity component.
+            use_pixel_distill: Whether to compute pixel distillation loss using DC-AE encoder.
+            dc_ae_path: Path to DC-AE model for pixel distillation.
         """
         super().__init__()
         model = AutoModel.from_pretrained(
@@ -173,6 +181,15 @@ class DistillLoss(torch.nn.Module):
         self.use_semantic_loss = use_semantic_loss
         self.semantic_l2_weight = semantic_l2_weight
         self.semantic_cosine_weight = semantic_cosine_weight
+        
+        # Pixel distillation config
+        self.use_pixel_distill = use_pixel_distill
+        if use_pixel_distill and dc_ae_path:
+            dc_ae = AutoencoderDC.from_pretrained(dc_ae_path, torch_dtype=torch.float32)
+            self.ref_dc_ae_encoder = dc_ae.encoder
+            for param in self.ref_dc_ae_encoder.parameters():
+                param.requires_grad = False
+            print(f"Loaded DC-AE encoder from {dc_ae_path} for pixel distillation")
     
     def _get_ref_features(self, x: torch.Tensor) -> torch.Tensor:
         """Extract features from frozen reference encoder.
@@ -237,18 +254,66 @@ class DistillLoss(torch.nn.Module):
         
         return total_loss, loss_dict
     
+    def _get_pixel_ref_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Extract pixel features from frozen DC-AE encoder.
+        
+        Args:
+            x: Input image tensor (B, C, H, W), normalized to [0, 1].
+            
+        Returns:
+            Reference pixel features (B, N, 32) reshaped from (B, 32, H', W').
+        """
+        # DC-AE encoder expects input in [0, 1] range
+        self.eval()
+        with torch.no_grad():
+            # DC-AE encoder outputs (B, 32, H', W') where H'=W'=7 for 224x224 input
+            pixel_feat = self.ref_dc_ae_encoder(x)  # (B, 32, H', W')
+            
+            # Reshape to (B, N, 32) to match pixel_latent format
+            b, c, h, w = pixel_feat.shape
+            pixel_feat = pixel_feat.permute(0, 2, 3, 1).contiguous()  # (B, H', W', 32)
+            pixel_feat = pixel_feat.view(b, h * w, c)  # (B, N, 32)
+        
+        return pixel_feat
+    
+    def _compute_pixel_distill_loss(self, 
+                                     ref_pixel_feat: torch.Tensor, 
+                                     pixel_latent: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Compute pixel distillation loss.
+        
+        Args:
+            ref_pixel_feat: Reference pixel features from frozen DC-AE encoder (B, N, 32).
+            pixel_latent: Pixel latent from dual-stream model (B, N, 32).
+            
+        Returns:
+            pixel_distill_loss: MSE loss between ref and predicted pixel features.
+            loss_dict: Dictionary containing loss components.
+        """
+        pixel_distill_loss = F.mse_loss(pixel_latent, ref_pixel_feat, reduction="mean")
+        
+        loss_dict = {
+            'pixel_distill_loss_raw': pixel_distill_loss.detach(),
+        }
+        
+        return pixel_distill_loss, loss_dict
+    
     def forward(self, x: torch.Tensor, out_feat: torch.Tensor, 
-                semantic_reconstructed: torch.Tensor = None) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        """Computes the distillation loss and optional semantic reconstruction loss.
+                semantic_reconstructed: torch.Tensor = None,
+                pixel_latent: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
+        """Computes the distillation loss and optional semantic/pixel reconstruction loss.
 
         Args:
             x: Input image tensor (B, C, H, W), normalized to [0, 1].
             out_feat: Output features from the trainable encoder (B, N, D).
             semantic_reconstructed: Reconstructed features from semantic decoder (B, N, D).
                                    Only used when use_semantic_loss=True.
+            pixel_latent: Pixel latent from dual-stream model (B, N, 32).
+                         Only used when use_pixel_distill=True.
 
         Returns:
-            distill_loss: The distillation loss.
+            distill_loss: The semantic distillation loss.
+            semantic_recon_loss: The semantic reconstruction loss (0 if not enabled).
+            pixel_distill_loss: The pixel distillation loss (0 if not enabled).
             loss_dict: Dictionary containing all loss components.
         """
         # Get reference features from frozen encoder
@@ -269,5 +334,14 @@ class DistillLoss(torch.nn.Module):
             )
             loss_dict.update(semantic_loss_dict)
             loss_dict['semantic_recon_loss_raw'] = semantic_recon_loss.detach()
+        
+        # Compute pixel distillation loss if enabled
+        pixel_distill_loss = torch.tensor(0.0).to(x.device)
+        if self.use_pixel_distill and pixel_latent is not None:
+            ref_pixel_feat = self._get_pixel_ref_features(x)
+            pixel_distill_loss, pixel_loss_dict = self._compute_pixel_distill_loss(
+                ref_pixel_feat, pixel_latent
+            )
+            loss_dict.update(pixel_loss_dict)
 
-        return distill_loss, semantic_recon_loss, loss_dict
+        return distill_loss, semantic_recon_loss, pixel_distill_loss, loss_dict
