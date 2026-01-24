@@ -28,6 +28,7 @@ model:
     
     # PS-VAE: Semantic AE configuration (simplified, without KL)
     # Reference: vlvae_intervl_semae.py
+    
     use_semantic_ae: True
     semantic_ae:
         latent_dim: 32      # Compact latent dimension
