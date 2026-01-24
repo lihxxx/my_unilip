@@ -254,11 +254,12 @@ class DistillLoss(torch.nn.Module):
         
         return total_loss, loss_dict
     
-    def _get_pixel_ref_features(self, x: torch.Tensor) -> torch.Tensor:
+    def _get_pixel_ref_features(self, x: torch.Tensor, target_size: int = 8) -> torch.Tensor:
         """Extract pixel features from frozen DC-AE encoder.
         
         Args:
             x: Input image tensor (B, C, H, W), normalized to [0, 1].
+            target_size: Target spatial size to match pixel_latent (default 8 for 8x8=64 tokens).
             
         Returns:
             Reference pixel features (B, N, 32) reshaped from (B, 32, H', W').
@@ -267,12 +268,23 @@ class DistillLoss(torch.nn.Module):
         self.eval()
         with torch.no_grad():
             # DC-AE encoder outputs (B, 32, H', W') where H'=W'=7 for 224x224 input
-            pixel_feat = self.ref_dc_ae_encoder(x)  # (B, 32, H', W')
+            pixel_feat = self.ref_dc_ae_encoder(x)  # (B, 32, 7, 7)
+            
+            # Interpolate to match pixel_latent spatial size (8x8 = 64 tokens)
+            # pixel_latent comes from ViT (16x16) + pixel_shuffle -> 8x8
+            b, c, h, w = pixel_feat.shape
+            if h != target_size or w != target_size:
+                pixel_feat = F.interpolate(
+                    pixel_feat, 
+                    size=(target_size, target_size), 
+                    mode='bilinear', 
+                    align_corners=False
+                )  # (B, 32, 8, 8)
             
             # Reshape to (B, N, 32) to match pixel_latent format
             b, c, h, w = pixel_feat.shape
-            pixel_feat = pixel_feat.permute(0, 2, 3, 1).contiguous()  # (B, H', W', 32)
-            pixel_feat = pixel_feat.view(b, h * w, c)  # (B, N, 32)
+            pixel_feat = pixel_feat.permute(0, 2, 3, 1).contiguous()  # (B, 8, 8, 32)
+            pixel_feat = pixel_feat.view(b, h * w, c)  # (B, 64, 32)
         
         return pixel_feat
     

@@ -118,6 +118,6 @@ training:
     ddp_find_unused_parameters: False
     use_ema: True
     seed: 42
-    max_train_steps: 50_000
+    max_train_steps: 100_000
     num_generated_images: 8
     max_grad_norm: 1.0
