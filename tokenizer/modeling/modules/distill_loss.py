@@ -254,12 +254,13 @@ class DistillLoss(torch.nn.Module):
         
         return total_loss, loss_dict
     
-    def _get_pixel_ref_features(self, x: torch.Tensor, target_size: int = 8) -> torch.Tensor:
+    def _get_pixel_ref_features(self, x: torch.Tensor, target_size: int = None) -> torch.Tensor:
         """Extract pixel features from frozen DC-AE encoder.
         
         Args:
             x: Input image tensor (B, C, H, W), normalized to [0, 1].
-            target_size: Target spatial size to match pixel_latent (default 8 for 8x8=64 tokens).
+            target_size: Target spatial size to match pixel_latent. If None, will be
+                         computed based on input image size (H/14/2 for patch_size=14 with pixel_shuffle).
             
         Returns:
             Reference pixel features (B, N, 32) reshaped from (B, 32, H', W').
@@ -267,13 +268,22 @@ class DistillLoss(torch.nn.Module):
         # DC-AE encoder expects input in [-1, 1] range, convert from [0, 1]
         x_dcae = x * 2 - 1  # [0, 1] -> [-1, 1]
         
+        # Calculate target_size based on input image size if not provided
+        # For ViT with patch_size=14 and pixel_shuffle(scale=0.5):
+        # 224x224 -> 16x16 patches -> 8x8 after pixel_shuffle -> target_size=8
+        # 448x448 -> 32x32 patches -> 16x16 after pixel_shuffle -> target_size=16
+        if target_size is None:
+            patch_size = 14  # InternVL3 uses patch_size=14
+            img_size = x.shape[-1]  # H or W
+            target_size = img_size // patch_size // 2  # div by 2 due to pixel_shuffle
+        
         self.eval()
         with torch.no_grad():
             # DC-AE encoder outputs (B, 32, H', W') where H'=W'=7 for 224x224 input
-            pixel_feat = self.ref_dc_ae_encoder(x_dcae)  # (B, 32, 7, 7)
+            pixel_feat = self.ref_dc_ae_encoder(x_dcae)  # (B, 32, 7, 7) for 224x224
             
-            # Interpolate to match pixel_latent spatial size (8x8 = 64 tokens)
-            # pixel_latent comes from ViT (16x16) + pixel_shuffle -> 8x8
+            # Interpolate to match pixel_latent spatial size
+            # pixel_latent comes from ViT + pixel_shuffle
             b, c, h, w = pixel_feat.shape
             if h != target_size or w != target_size:
                 pixel_feat = F.interpolate(
@@ -281,12 +291,12 @@ class DistillLoss(torch.nn.Module):
                     size=(target_size, target_size), 
                     mode='bilinear', 
                     align_corners=False
-                )  # (B, 32, 8, 8)
+                )  # (B, 32, target_size, target_size)
             
             # Reshape to (B, N, 32) to match pixel_latent format
             b, c, h, w = pixel_feat.shape
-            pixel_feat = pixel_feat.permute(0, 2, 3, 1).contiguous()  # (B, 8, 8, 32)
-            pixel_feat = pixel_feat.view(b, h * w, c)  # (B, 64, 32)
+            pixel_feat = pixel_feat.permute(0, 2, 3, 1).contiguous()  # (B, H, W, 32)
+            pixel_feat = pixel_feat.view(b, h * w, c)  # (B, N, 32)
         
         return pixel_feat
     
