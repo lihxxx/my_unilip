@@ -3,10 +3,10 @@ experiment:
     name: "unilip_1b_dual_stream_pixel_distill_224_semae616_IN_GAN30k_lr3ex05_80k"
     output_dir: "checkpoints/unilip_1b_dual_stream_pixel_distill_224_semae616_IN_GAN30k_lr3ex05_80k"
     max_train_examples: 1_281_167    # ImageNet训练集大小
-    save_every: 5_000
-    eval_every: 5_000
+    save_every: 10_000
+    eval_every: 10_000
     eval_max_samples: -1            # 训练时只评估500条数据，设为-1表示全量评估
-    generate_every: 1_000
+    generate_every: 5_000
     log_every: 50
     log_grad_norm_every: 500
     resume: True
