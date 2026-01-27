@@ -22,6 +22,7 @@ import math
 import json
 from pathlib import Path
 from copy import deepcopy
+import numpy as np
 
 from omegaconf import OmegaConf
 from huggingface_hub import PyTorchModelHubMixin
@@ -253,6 +254,14 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         self.disable_drop_path = config.model.get("disable_drop_path", False)
         self.output_distill_feat = config.model.get("output_distill_feat", False)
         self.output_size = config.dataset.preprocessing.crop_size
+        
+        # Padding support for inference with different resolutions
+        # Default is False, enable for inference when input resolution differs from training
+        self.use_padding = config.model.get("use_padding", False)
+        self.pad_info = None  # Will store padding info during encode for use in decode
+        
+        if self.use_padding:
+            print("Padding mode enabled for inference with different resolutions")
 
         # Load MLLM model
         path = self.config.model.mllm_path
@@ -471,6 +480,92 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
+    def padding(self, tensor):
+        """Pad tensor to multiple of 28 (ViT patch size) for inference.
+        
+        Args:
+            tensor: Input tensor of shape (B, C, H, W), normalized by ImageNet stats.
+            
+        Returns:
+            Padded tensor with dimensions as multiples of 28.
+        """
+        # Renormalize to [0,1]
+        mean = self.config.dataset.preprocessing.normalize_mean
+        std = self.config.dataset.preprocessing.normalize_std
+        std = torch.tensor(std).to(tensor.device)
+        mean = torch.tensor(mean).to(tensor.device)
+        mean = mean[None, :, None, None]
+        std = std[None, :, None, None]
+        
+        # Denormalize: inputs are normalized by ImageNet, convert to [0, 1]
+        original_images = tensor * std + mean
+        b, c, h, w = original_images.shape
+        
+        # Calculate target height and width (smallest multiple of 28 >= current size)
+        new_h = math.ceil(h / 28) * 28
+        new_w = math.ceil(w / 28) * 28
+        
+        # Calculate padding amounts
+        pad_h = new_h - h
+        pad_w = new_w - w
+        
+        # Calculate top/bottom and left/right padding
+        pad_top = pad_h // 2
+        pad_bottom = pad_h - pad_top
+        pad_left = pad_w // 2
+        pad_right = pad_w - pad_left
+        
+        # Apply symmetric padding (reflect mode to avoid edge discontinuities)
+        padded_images = F.pad(original_images, (pad_left, pad_right, pad_top, pad_bottom), mode='reflect')
+        
+        # Renormalize
+        normalized_images = (padded_images - mean) / std
+        self.pad_info = (pad_top, pad_bottom, pad_left, pad_right)
+        return normalized_images
+    
+    def remove_padding(self, tensor):
+        """Remove padding from the tensor after decoding.
+        
+        Args:
+            tensor: Padded tensor of shape (B, C, H_padded, W_padded).
+            
+        Returns:
+            Unpadded tensor with original spatial dimensions.
+        """
+        if self.pad_info is None:
+            return tensor
+            
+        pad_top, pad_bottom, pad_left, pad_right = self.pad_info
+        
+        # Calculate original image region
+        _, _, h_padded, w_padded = tensor.shape
+        
+        # Handle edge case where padding is 0
+        h_end = h_padded - pad_bottom if pad_bottom > 0 else h_padded
+        w_end = w_padded - pad_right if pad_right > 0 else w_padded
+        
+        unpadded_tensor = tensor[:, :, pad_top:h_end, pad_left:w_end]
+        return unpadded_tensor
+    
+    def resize_down(self, tensor):
+        """Resize down to 28/32 ratio after decoding.
+        
+        This is needed because the DC-AE decoder produces output at 32x scale,
+        but ViT encoder uses 28x28 patches, so we need to scale down by 28/32.
+        """
+        _, _, h, w = tensor.shape
+        
+        # Calculate target size (rounding)
+        target_h = round(h * 28 / 32)
+        target_w = round(w * 28 / 32)
+        
+        return F.interpolate(
+            tensor, 
+            size=(target_h, target_w),
+            mode='bilinear',
+            align_corners=True
+        )
+
     def encode(self, x):
         """Encode input images to latent representation.
         
@@ -479,7 +574,15 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         2. Semantic Encoder -> compact latent z with KL regularization
         3. Semantic Decoder -> reconstructed features f_h'' (for semantic loss)
         4. ResBlocks + MLP -> final latent for pixel decoder
+        
+        If use_padding is enabled (for inference):
+        - Pads input to multiple of 28 before encoding
+        - Stores padding info for use in decode()
         """
+        # Apply padding if enabled (for inference with different resolutions)
+        if self.use_padding:
+            x = self.padding(x)
+        
         vit_embeds = self.encoder.embeddings(x)
         
         # Process through encoder layers
@@ -588,14 +691,25 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
             return z.float(), z.float()
 
     def decode(self, z_quantized):
-        """Decode latent representation to image."""
+        """Decode latent representation to image.
+        
+        If use_padding is enabled (for inference):
+        - First resizes down by 28/32 ratio
+        - Then removes padding to restore original dimensions
+        """
         if self.use_gradient_checkpoint:
             dec = dcae_decoder_forward_with_checkpoint(self.decoder, z_quantized)
         else:
             dec = self.decoder(z_quantized)
         
-        dec = F.interpolate(dec, size=(self.output_size, self.output_size), 
-                           mode='bilinear', align_corners=False)
+        if self.use_padding:
+            # For padding mode: resize down by 28/32 ratio, then remove padding
+            dec = self.resize_down(dec)
+            dec = self.remove_padding(dec)
+        else:
+            # Normal mode: simple interpolate to output size
+            dec = F.interpolate(dec, size=(self.output_size, self.output_size), 
+                               mode='bilinear', align_corners=False)
         return dec
 
     def forward(self, x):
