@@ -10,8 +10,9 @@ export GEN_IMG_FOLDER=/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/m
 
 
 # single node
-# torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port=$MASTER_PORT --master_addr=$MASTER_ADDR \
-torchrun --nproc_per_node=2 --master_port=29506 \
+# torchrun --nproc_per_node=2 --master_port=29506 \
+
+torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port=$MASTER_PORT --master_addr=$MASTER_ADDR \
     unilip/train/train_stage3.py \
     --deepspeed /mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/deepspeed_scripts/zero0.json \
     --model_name_or_path /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/UniLIP-1B  \

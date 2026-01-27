@@ -20,3 +20,4 @@ unilip_stage1_imagenet/
 wandb
 data
 unilip.egg-info
+results
