@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "unilip_1b_dual_stream_pixel_distill_224_semae616_IN_GAN30k_lr3ex05_80k"
-    output_dir: "checkpoints/unilip_1b_dual_stream_pixel_distill_224_semae616_IN_GAN30k_lr3ex05_80k"
+    name: "unilip_1b_dual_stream_pixel_distill_224_semae316_IN_GAN30k_lr2ex01_80k"
+    output_dir: "checkpoints/unilip_1b_dual_stream_pixel_distill_224_semae316_IN_GAN30k_lr2ex01_80k"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 10_000
     eval_every: 10_000
@@ -34,7 +34,7 @@ model:
     use_dual_stream: True
     use_semantic_ae: False
     dual_stream:
-        num_layers: 6       # Number of transformer encoder layers for semantic stream
+        num_layers: 3       # Number of transformer encoder layers for semantic stream
         num_heads: 16       # Number of attention heads (2048 / 16 = 128 head_dim)
         mlp_ratio: 4.0      # MLP expansion ratio
         dropout: 0.0        # Dropout rate
@@ -91,13 +91,13 @@ dataset:
 optimizer:
     name: adamw 
     params:
-        learning_rate: 3e-4
-        discriminator_learning_rate: 3e-4
+        learning_rate: 2e-4
+        discriminator_learning_rate: 2e-4
         beta1: 0.9
         beta2: 0.999
         weight_decay: 1e-4
         use_encoder_lr_scale: True
-        encoder_lr_scale: 0.5
+        encoder_lr_scale: 0.1
 
 
 lr_scheduler:
