@@ -143,8 +143,10 @@ def main():
     if accelerator.is_main_process:
         eval_scores_path = checkpoint_dir / "eval_scores.json"
         logger.info(f"Saving evaluation scores to {eval_scores_path}")
+        # Convert numpy/torch types to Python native types for JSON serialization
+        eval_scores_serializable = {k: float(v) for k, v in eval_scores.items()}
         with open(eval_scores_path, 'w') as f:
-            json.dump(eval_scores, f, indent=4)
+            json.dump(eval_scores_serializable, f, indent=4)
         logger.info(f"Evaluation completed. Results saved to {checkpoint_dir}")
 
 if __name__ == "__main__":
