@@ -14,10 +14,10 @@ experiment:
 
 
 model:
-    name: DC_AE_ViT_Stage2_Pad
+    name: DC_AE_ViT_Unified
     embed_dim: 32
     patch_size: 14
-    stage1_ckpt: 1b_unilip.pth
+    # stage1_ckpt: 1b_unilip.pth
     mllm_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B"
     dc_ae_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers"
     vq_model:
@@ -25,7 +25,7 @@ model:
         finetune_decoder: False
 
 losses:
-    name: ReconstructionLoss_Stage2
+    name: ReconstructionLoss_Unified
     discriminator_start: 200_000
     quantizer_weight: 1.0
     discriminator_factor: 1.0
