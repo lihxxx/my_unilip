@@ -28,6 +28,7 @@ import sys
 sys.path.append('.')
 from data import TextImageDataset
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from omegaconf import OmegaConf
 from torch.optim import AdamW
@@ -512,10 +513,13 @@ def train_one_epoch(config, logger, accelerator,
             # Evaluate reconstruction.
             if eval_dataloader is not None and (global_step + 1) % config.experiment.eval_every == 0:
                 eval_max_samples = config.experiment.get("eval_max_samples",  500)
+                eval_resolution = config.experiment.get("eval_resolution", 256)
                 if eval_max_samples > 0:
                     logger.info(f"Computing metrics on {eval_max_samples} validation samples.")
                 else:
                     logger.info(f"Computing metrics on the full validation set.")
+                if eval_resolution > 0:
+                    logger.info(f"Evaluation resolution: {eval_resolution}x{eval_resolution}")
                     
                 if config.training.get("use_ema", False):
                     ema_model.store(model.parameters())
@@ -528,6 +532,7 @@ def train_one_epoch(config, logger, accelerator,
                         evaluator,
                         model_type=model_type,
                         max_samples=eval_max_samples,
+                        eval_resolution=eval_resolution,
                     )
                     logger.info(
                         f"EMA EVALUATION "
@@ -549,6 +554,7 @@ def train_one_epoch(config, logger, accelerator,
                         evaluator,
                         model_type=model_type,
                         max_samples=eval_max_samples,
+                        eval_resolution=eval_resolution,
                     )
 
                     logger.info(
@@ -582,6 +588,7 @@ def eval_reconstruction(
     evaluator,
     model_type="titok",
     max_samples=-1,
+    eval_resolution=256,
 ):
     """Evaluate reconstruction quality.
     
@@ -593,6 +600,8 @@ def eval_reconstruction(
         model_type: Type of the model.
         max_samples: Maximum number of samples to evaluate. 
                      If -1 or None, evaluate all samples. Default: -1.
+        eval_resolution: Resolution to resize images before evaluation.
+                        If -1 or 0, use original resolution. Default: -1.
     """
     model.eval()
     evaluator.reset_metrics()
@@ -611,6 +620,12 @@ def eval_reconstruction(
             raise NotImplementedError(f"Model type {model_type} not supported")
 
         reconstructed_images = torch.clamp(reconstructed_images, -1.0, 1.0)
+        
+        # Resize to eval_resolution if specified (for consistent evaluation across different training resolutions)
+        if eval_resolution is not None and eval_resolution > 0:
+            original_images = F.interpolate(original_images, size=(eval_resolution, eval_resolution), mode='bilinear', align_corners=False)
+            reconstructed_images = F.interpolate(reconstructed_images, size=(eval_resolution, eval_resolution), mode='bilinear', align_corners=False)
+        
         # Quantize to uint8
         reconstructed_images = (torch.round((reconstructed_images+1)/2 * 255.0) - 127.5) / 127.5
         evaluator.update(original_images, reconstructed_images.squeeze(2), None)
