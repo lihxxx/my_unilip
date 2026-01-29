@@ -1,11 +1,12 @@
 experiment:
     project: "unilip"
-    name: "unilip_1b_dual_stream_pixel_distill_224_semae316_IN_GAN30k_lr2ex01_80k"
-    output_dir: "checkpoints/unilip_1b_dual_stream_pixel_distill_224_semae316_IN_GAN30k_lr2ex01_80k"
+    name: "1b_dual_stream_pixelDis05_224E256_semae316_IN_GAN30k_lr3ex05_80k"
+    output_dir: "checkpoints/1b_dual_stream_pixelDis05_224E256_semae316_IN_GAN30k_lr3ex05_80k"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 10_000
     eval_every: 10_000
     eval_max_samples: -1            # 训练时只评估500条数据，设为-1表示全量评估
+    eval_resolution: 256            # 评估时将图像resize到此分辨率（默认256），设为-1或0则使用原始分辨率
     generate_every: 5_000
     log_every: 50
     log_grad_norm_every: 500
@@ -59,7 +60,7 @@ losses:
     
     # Pixel Distillation loss (for pixel stream alignment with frozen DC-AE encoder)
     # pixel_latent (32-dim) is compared with DC-AE encoder output
-    pixel_distill_weight: 1.0
+    pixel_distill_weight: 0.5
     
     # Pixel reconstruction loss
     reconstruction_loss: "l2"
@@ -91,13 +92,13 @@ dataset:
 optimizer:
     name: adamw 
     params:
-        learning_rate: 2e-4
-        discriminator_learning_rate: 2e-4
+        learning_rate: 3e-4
+        discriminator_learning_rate: 3e-4
         beta1: 0.9
         beta2: 0.999
         weight_decay: 1e-4
         use_encoder_lr_scale: True
-        encoder_lr_scale: 0.1
+        encoder_lr_scale: 0.5
 
 
 lr_scheduler:
