@@ -1,4 +1,4 @@
-"""Training script for TiTok.
+"""Evaluation script for UniLIP Tokenizer.
 
 Copyright (2024) Bytedance Ltd. and/or its affiliates
 
@@ -19,6 +19,7 @@ Reference:
 """
 import math
 import os
+import json
 from pathlib import Path
 
 from accelerate.utils import set_seed
@@ -39,12 +40,22 @@ from utils.train_utils import (
     eval_reconstruction)
 
 
+def get_checkpoint_dir(checkpoint_path: str) -> Path:
+    """Get the directory containing the checkpoint file."""
+    return Path(checkpoint_path).parent
+
+
 def main():
     workspace = os.environ.get('WORKSPACE', '')
     if workspace:
         torch.hub.set_dir(workspace + "/models/hub")
 
     config = get_config()
+    
+    # Save original config (before any modifications) to checkpoint directory
+    checkpoint_dir = get_checkpoint_dir(config.checkpoint_path)
+    original_config = OmegaConf.to_container(config, resolve=True)
+    
     # Enable TF32 on Ampere GPUs.
     if config.training.enable_tf32:
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -76,10 +87,13 @@ def main():
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
         accelerator.init_trackers(config.experiment.name)
-        config_path = Path(output_dir) / "config.yaml"
-        logger.info(f"Saving config to {config_path}")
-        OmegaConf.save(config, config_path)
         logger.info(f"Config:\n{OmegaConf.to_yaml(config)}")
+        
+        # Save original config to checkpoint directory
+        eval_config_path = checkpoint_dir / "eval_config.yaml"
+        logger.info(f"Saving evaluation config to {eval_config_path}")
+        with open(eval_config_path, 'w') as f:
+            OmegaConf.save(OmegaConf.create(original_config), f)
 
     # If passed along, set the training seed now.
     if config.training.seed is not None:
@@ -105,12 +119,14 @@ def main():
     if config.training.use_ema:
         ema_model.to(accelerator.device)
 
-    # Get max_samples for evaluation (default -1 means all samples)
+    # Get max_samples and eval_resolution for evaluation
     eval_max_samples = config.experiment.get("eval_max_samples", -1)
+    eval_resolution = config.experiment.get("eval_resolution", 256)
     if eval_max_samples > 0:
         logger.info(f"Evaluating on {eval_max_samples} samples.")
     else:
         logger.info(f"Evaluating on full validation set.")
+    logger.info(f"Evaluation resolution: {eval_resolution}x{eval_resolution}")
     
     eval_scores = eval_reconstruction(
         model,
@@ -119,8 +135,17 @@ def main():
         evaluator,
         model_type="titok",
         max_samples=eval_max_samples,
+        eval_resolution=eval_resolution,
     )
     logger.info(pprint.pformat(eval_scores))
+    
+    # Save eval_scores to checkpoint directory
+    if accelerator.is_main_process:
+        eval_scores_path = checkpoint_dir / "eval_scores.json"
+        logger.info(f"Saving evaluation scores to {eval_scores_path}")
+        with open(eval_scores_path, 'w') as f:
+            json.dump(eval_scores, f, indent=4)
+        logger.info(f"Evaluation completed. Results saved to {checkpoint_dir}")
 
 if __name__ == "__main__":
     main()
