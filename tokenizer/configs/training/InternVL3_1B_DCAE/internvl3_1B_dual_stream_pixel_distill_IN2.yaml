@@ -1,11 +1,12 @@
 experiment:
     project: "unilip"
-    name: "unilip_1b_dual_stream_pixel_distill_224_semae616_IN_GAN30k_lr2ex01_80k"
-    output_dir: "checkpoints/unilip_1b_dual_stream_pixel_distill_224_semae616_IN_GAN30k_lr2ex01_80k"
+    name: "1b_dual_stream_pixelDis10_224E256_semae316_IN_GAN30k_lr2ex01_100k"
+    output_dir: "checkpoints/1b_dual_stream_pixelDis10_224E256_semae316_IN_GAN30k_lr2ex01_100k"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 10_000
     eval_every: 10_000
     eval_max_samples: -1            # 训练时只评估500条数据，设为-1表示全量评估
+    eval_resolution: 256            # 评估时将图像resize到此分辨率（默认256），设为-1或0则使用原始分辨率
     generate_every: 5_000
     log_every: 50
     log_grad_norm_every: 500
@@ -34,7 +35,7 @@ model:
     use_dual_stream: True
     use_semantic_ae: False
     dual_stream:
-        num_layers: 6       # Number of transformer encoder layers for semantic stream
+        num_layers: 3       # Number of transformer encoder layers for semantic stream
         num_heads: 16       # Number of attention heads (2048 / 16 = 128 head_dim)
         mlp_ratio: 4.0      # MLP expansion ratio
         dropout: 0.0        # Dropout rate
@@ -118,6 +119,6 @@ training:
     ddp_find_unused_parameters: False
     use_ema: True
     seed: 42
-    max_train_steps: 80_000
+    max_train_steps: 100_000
     num_generated_images: 8
     max_grad_norm: 1.0

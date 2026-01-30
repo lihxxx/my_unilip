@@ -1,6 +1,6 @@
 WANDB_MODE=offline accelerate launch --num_machines=1 --num_processes=2 --machine_rank=0 --main_process_ip=127.0.0.3 --main_process_port=9989 --same_network \
-    scripts/evaluation.py config=/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/configs/training/InternVL3_1B_DCAE/internvl3_1B_stage2_test_256.yaml \
-    checkpoint_path=/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/UniLIP/1b_unilip.pth \
+    scripts/evaluation.py config=/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/unilip_1b_dual_stream_pixel_distill_224_IN_GAN25k/config.yaml \
+    checkpoint_path=/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/unilip_1b_dual_stream_pixel_distill_224_IN_GAN25k/checkpoint-100000/ema_model/pytorch_model.bin \
     model.use_padding=False \
     training.per_gpu_batch_size=32 experiment.eval_max_samples=-1 experiment.eval_every=1 \
     experiment.eval_resolution=256 \
