@@ -25,7 +25,7 @@ model:
     freeze_encoder: False
     output_distill_feat: True
     disable_drop_path: True
-    use_gradient_checkpoint: True
+    use_gradient_checkpoint: False
     
     # Dual Stream configuration with Pixel Distillation
     # Stream 1 (Semantic): vit_embeds -> TransformerEncoder -> semantic_feat (for distill_loss)

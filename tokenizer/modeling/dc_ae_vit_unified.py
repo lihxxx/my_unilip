@@ -443,7 +443,9 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         # Load stage1 checkpoint if provided (for stage2 training)
         stage1_ckpt = self.config.model.get("stage1_ckpt", "")
         if stage1_ckpt:
-            msg = self.load_state_dict(torch.load(stage1_ckpt), strict=False)
+            # Use map_location="cpu" to avoid loading checkpoint directly to GPU,
+            # which would cause OOM due to double memory usage
+            msg = self.load_state_dict(torch.load(stage1_ckpt, map_location="cpu"), strict=False)
             print(f"Loaded stage1 checkpoint from {stage1_ckpt}")
             print(f"Missing keys: {msg.missing_keys}")
             print(f"Unexpected keys: {msg.unexpected_keys}")
