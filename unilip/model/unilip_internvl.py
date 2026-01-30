@@ -315,6 +315,7 @@ class UniLIP_InternVL_MetaModel:
         vit_embeds = self.vision_tower.embeddings(pixel_values)
         
         # 通过encoder layers（只到repa_encoder_depth）
+        # TODO: 这里使用的是中间特征，原本repa使用的是最后特征，可能需要修改
         for idx, encoder_layer in enumerate(self.vision_tower.encoder.layers):
             vit_embeds = encoder_layer(vit_embeds)
             if idx + 1 >= self.repa_encoder_depth:
