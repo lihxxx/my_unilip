@@ -309,21 +309,29 @@ class UniLIP_InternVL_MetaModel:
         
         return vit_features
     
+    # def _extract_vit_features_impl(self, pixel_values):
+    #     """实际提取vision encoder特征的实现"""
+    #     # 获取vision encoder的patch embeddings
+    #     vit_embeds = self.vision_tower.embeddings(pixel_values)
+        
+    #     # 通过encoder layers（只到repa_encoder_depth）
+    #     # TODO: 这里使用的是中间特征，原本repa使用的是最后特征，可能需要修改
+    #     for idx, encoder_layer in enumerate(self.vision_tower.encoder.layers):
+    #         vit_embeds = encoder_layer(vit_embeds)
+    #         if idx + 1 >= self.repa_encoder_depth:
+    #             break
+        
+    #     # 去掉CLS token，只保留patch tokens
+    #     vit_features = vit_embeds[:, 1:, :].contiguous()
+        
+    #     return vit_features
+
     def _extract_vit_features_impl(self, pixel_values):
-        """实际提取vision encoder特征的实现"""
-        # 获取vision encoder的patch embeddings
-        vit_embeds = self.vision_tower.embeddings(pixel_values)
-        
-        # 通过encoder layers（只到repa_encoder_depth）
-        # TODO: 这里使用的是中间特征，原本repa使用的是最后特征，可能需要修改
-        for idx, encoder_layer in enumerate(self.vision_tower.encoder.layers):
-            vit_embeds = encoder_layer(vit_embeds)
-            if idx + 1 >= self.repa_encoder_depth:
-                break
-        
-        # 去掉CLS token，只保留patch tokens
-        vit_features = vit_embeds[:, 1:, :].contiguous()
-        
+        """提取Vision Encoder的最后一层特征"""
+        # 直接获取完整的encoder输出
+        vit_outputs = self.vision_tower(pixel_values)
+        # 使用最后一层的patch tokens
+        vit_features = vit_outputs[:, 1:, :].contiguous()  # 去掉CLS token
         return vit_features
 
     def compute_repa_loss(self, dit_features, vit_features):
