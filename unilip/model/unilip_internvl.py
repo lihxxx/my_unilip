@@ -240,8 +240,14 @@ class UniLIP_InternVL_MetaModel:
             # 获取vision encoder的特征维度（作为REPA target）
             vit_hidden_size = self.vision_tower.embeddings.patch_embedding.weight.shape[0]
             
-            # 获取DiT的隐藏维度
-            dit_hidden_size = self.dit.config.caption_channels  # Sana DiT的hidden size
+            # 获取DiT transformer blocks的内部隐藏维度
+            # Sana DiT: inner_dim = num_attention_heads * attention_head_dim
+            dit_config = self.dit.config
+            if hasattr(dit_config, 'num_attention_heads') and hasattr(dit_config, 'attention_head_dim'):
+                dit_hidden_size = dit_config.num_attention_heads * dit_config.attention_head_dim
+            else:
+                # fallback: 尝试从第一个transformer block获取
+                dit_hidden_size = self.dit.transformer_blocks[0].attn1.to_q.in_features
             
             # 创建REPA投影头：将DiT中间层特征映射到vision encoder特征空间
             self.repa_projector = build_repa_mlp(
