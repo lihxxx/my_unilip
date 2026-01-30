@@ -6,13 +6,24 @@ import torch.nn.functional as F
 
 from .sana import build_sana
 
-from unilip.constants import DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, IMAGE_TOKEN_IDX, DEFAULT_IM_START_TOKEN_IDX, DEFAULT_IM_END_TOKEN_IDX, UND_IMAGE_TOKEN_IDX
+from unilip.constants import DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, IMAGE_TOKEN_IDX, DEFAULT_IM_START_TOKEN_IDX, DEFAULT_IM_END_TOKEN_IDX, UND_IMAGE_TOKEN_IDX, DEFAULT_IMAGE_PATCH_TOKEN
 import math
 from transformers import AutoTokenizer, AutoModel, AutoConfig
 from .vae_modules import DCAE_Decoder, ResBlock
 from omegaconf import OmegaConf
 from diffusers.models import AutoencoderDC
 from copy import deepcopy
+
+
+def build_repa_mlp(hidden_size, projector_dim, z_dim):
+    """构建REPA投影头MLP"""
+    return nn.Sequential(
+        nn.Linear(hidden_size, projector_dim),
+        nn.SiLU(),
+        nn.Linear(projector_dim, projector_dim),
+        nn.SiLU(),
+        nn.Linear(projector_dim, z_dim),
+    )
 
 class UniLIP_InternVL_MetaModel:
 
@@ -209,6 +220,143 @@ class UniLIP_InternVL_MetaModel:
         for p in self.projector.parameters():
             p.requires_grad = connect_require_grad
         self.latent_queries.requires_grad = connect_require_grad
+
+        # ========== REPA相关初始化 ==========
+        # REPA: 对齐DiT中间层特征与Vision Encoder特征
+        self.enable_repa = getattr(model_args, 'enable_repa', False)
+        self.repa_loss_weight = getattr(model_args, 'repa_loss_weight', 0.5)
+        self.repa_encoder_depth = getattr(model_args, 'repa_encoder_depth', 6)
+        repa_projector_dim = getattr(model_args, 'repa_projector_dim', 2048)
+        
+        # 存储hook捕获的特征
+        self._dit_intermediate_features = None
+        self._dit_hook_handle = None
+        
+        if self.enable_repa:
+            print(f"=== Initializing REPA ===")
+            print(f"  REPA loss weight: {self.repa_loss_weight}")
+            print(f"  REPA encoder depth (DiT layer): {self.repa_encoder_depth}")
+            
+            # 获取vision encoder的特征维度（作为REPA target）
+            vit_hidden_size = self.vision_tower.embeddings.patch_embedding.weight.shape[0]
+            
+            # 获取DiT的隐藏维度
+            dit_hidden_size = self.dit.config.caption_channels  # Sana DiT的hidden size
+            
+            # 创建REPA投影头：将DiT中间层特征映射到vision encoder特征空间
+            self.repa_projector = build_repa_mlp(
+                dit_hidden_size, 
+                repa_projector_dim, 
+                vit_hidden_size  # 映射到vision encoder的特征维度
+            )
+            print(f"  REPA projector: DiT({dit_hidden_size}) -> {repa_projector_dim} -> ViT({vit_hidden_size})")
+            
+            # REPA投影头需要训练
+            for p in self.repa_projector.parameters():
+                p.requires_grad = True
+            
+            # 注册hook到DiT的指定层
+            self._register_dit_hook()
+        else:
+            self.repa_projector = None
+    
+    def _register_dit_hook(self):
+        """在DiT的指定transformer层注册forward hook来捕获中间特征"""
+        if self._dit_hook_handle is not None:
+            self._dit_hook_handle.remove()
+        
+        # Sana DiT的transformer blocks在 dit.transformer_blocks
+        if hasattr(self.dit, 'transformer_blocks'):
+            target_layer_idx = min(self.repa_encoder_depth - 1, len(self.dit.transformer_blocks) - 1)
+            target_layer = self.dit.transformer_blocks[target_layer_idx]
+            
+            def hook_fn(module, input, output):
+                # output通常是 (hidden_states, ...) 或直接是hidden_states
+                if isinstance(output, tuple):
+                    self._dit_intermediate_features = output[0].clone()
+                else:
+                    self._dit_intermediate_features = output.clone()
+            
+            self._dit_hook_handle = target_layer.register_forward_hook(hook_fn)
+            print(f"  Registered REPA hook at DiT transformer_blocks[{target_layer_idx}]")
+        else:
+            print(f"  Warning: Could not find transformer_blocks in DiT, REPA disabled")
+            self.enable_repa = False
+
+    def extract_vision_features_for_repa(self, pixel_values):
+        """
+        提取vision encoder的中间层特征用于REPA对齐
+        
+        Args:
+            pixel_values: [B, C, H, W] 输入图像
+        Returns:
+            vit_features: [B, N, D] vision encoder的patch特征
+        """
+        # 是否解冻vision encoder决定是否使用no_grad
+        if not any(p.requires_grad for p in self.vision_tower.parameters()):
+            # vision encoder冻结，使用no_grad
+            with torch.no_grad():
+                vit_features = self._extract_vit_features_impl(pixel_values)
+        else:
+            # REPA-E模式，vision encoder可训练
+            vit_features = self._extract_vit_features_impl(pixel_values)
+        
+        return vit_features
+    
+    def _extract_vit_features_impl(self, pixel_values):
+        """实际提取vision encoder特征的实现"""
+        # 获取vision encoder的patch embeddings
+        vit_embeds = self.vision_tower.embeddings(pixel_values)
+        
+        # 通过encoder layers（只到repa_encoder_depth）
+        for idx, encoder_layer in enumerate(self.vision_tower.encoder.layers):
+            vit_embeds = encoder_layer(vit_embeds)
+            if idx + 1 >= self.repa_encoder_depth:
+                break
+        
+        # 去掉CLS token，只保留patch tokens
+        vit_features = vit_embeds[:, 1:, :].contiguous()
+        
+        return vit_features
+
+    def compute_repa_loss(self, dit_features, vit_features):
+        """
+        计算REPA对齐损失（负余弦相似度）
+        
+        Args:
+            dit_features: [B, N_dit, D] DiT中间层特征（经过projector投影后）
+            vit_features: [B, N_vit, D] Vision Encoder中间层特征
+        Returns:
+            repa_loss: REPA损失值
+        """
+        # 对齐序列长度（通过adaptive pooling）
+        N_dit = dit_features.shape[1]
+        N_vit = vit_features.shape[1]
+        
+        if N_dit != N_vit:
+            # 使用adaptive average pooling对齐长度
+            # 将vit_features pooling到dit_features的长度
+            vit_features = vit_features.permute(0, 2, 1)  # [B, D, N_vit]
+            vit_features = F.adaptive_avg_pool1d(vit_features, N_dit)
+            vit_features = vit_features.permute(0, 2, 1)  # [B, N_dit, D]
+        
+        # L2 normalization
+        dit_norm = F.normalize(dit_features, dim=-1)
+        vit_norm = F.normalize(vit_features, dim=-1)
+        
+        # 负余弦相似度
+        cos_sim = (dit_norm * vit_norm).sum(dim=-1)  # [B, N]
+        repa_loss = -cos_sim.mean()
+        
+        return repa_loss
+    
+    def get_dit_intermediate_features(self):
+        """获取hook捕获的DiT中间层特征"""
+        return self._dit_intermediate_features
+    
+    def clear_dit_intermediate_features(self):
+        """清除存储的中间特征"""
+        self._dit_intermediate_features = None
 
 
 class UniLIP_InternVL_MetaForCausalLM(ABC):

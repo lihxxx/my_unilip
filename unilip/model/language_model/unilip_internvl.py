@@ -119,11 +119,26 @@ class UniLIP_InternVLForCausalLM(InternVLForConditionalGeneration, UniLIP_Intern
         logits = None
         
         total_loss = None
+        repa_loss = None
+        
         if labels is not None:
             img_loss_funct = torch.nn.MSELoss()
             # replace und image embeds llm processed -> vit processed
             if und_image_embeds is not None:
                 hidden_states[und_img_idx] = und_image_embeds.to(hidden_states.device).flatten(0,1)
+            
+            # ========== REPA: 提取vision encoder特征作为对齐目标 ==========
+            enable_repa = getattr(self.get_model(), 'enable_repa', False)
+            
+            if enable_repa and gen_image is not None:
+                # 提取vision encoder中间层特征作为REPA target
+                vit_features_for_repa = self.get_model().extract_vision_features_for_repa(gen_image)
+                # 清除之前的中间特征
+                self.get_model().clear_dit_intermediate_features()
+            else:
+                vit_features_for_repa = None
+            
+            # ========== 通过llm_connector处理 ==========
             img_hidden_states = self.model.llm_connector(
                 attention_mask=bidr_attention_mask,
                 position_ids=position_ids,
@@ -133,8 +148,10 @@ class UniLIP_InternVLForCausalLM(InternVLForConditionalGeneration, UniLIP_Intern
                 use_cache=False
             ).hidden_states[-1]
             img_hidden_states = self.get_model().projector(img_hidden_states)
+            
             if latents is None:
                 img_loss = img_loss_funct(img_hidden_states, torch.clone(img_hidden_states.detach()))
+                weighted_repa_loss = 0.0
             else:
                 bsz = latents.shape[0]
                 dtype = latents.dtype
@@ -144,6 +161,8 @@ class UniLIP_InternVLForCausalLM(InternVLForConditionalGeneration, UniLIP_Intern
                 timesteps = self.get_model().noise_scheduler.timesteps[indices].to(device=latents.device)
                 sigmas = self.get_sigmas(timesteps, latents.device, n_dim=latents.ndim, dtype=dtype)
                 noisy_latents = (1.0 - sigmas) * latents + sigmas * noise
+                
+                # DiT forward - hook会自动捕获中间层特征
                 noise_pred = self.get_model().dit(
                     noisy_latents,
                     timestep=timesteps,
@@ -154,9 +173,30 @@ class UniLIP_InternVLForCausalLM(InternVLForConditionalGeneration, UniLIP_Intern
                 target = noise - latents
 
                 img_loss = F.mse_loss(noise_pred.float(), target.float(), reduction="mean")
+                
+                # ========== REPA: 计算DiT中间层与Vision Encoder的对齐损失 ==========
+                if enable_repa and vit_features_for_repa is not None:
+                    # 获取DiT中间层特征（通过hook捕获）
+                    dit_intermediate = self.get_model().get_dit_intermediate_features()
+                    
+                    if dit_intermediate is not None:
+                        # dit_intermediate: [B, H*W, D] - DiT的latent patch序列
+                        # 通过REPA投影头映射到vision encoder特征空间
+                        dit_projected = self.get_model().repa_projector(dit_intermediate)  # [B, H*W, vit_dim]
+                        
+                        # 计算REPA loss
+                        repa_loss = self.get_model().compute_repa_loss(dit_projected, vit_features_for_repa)
+                        repa_loss_weight = getattr(self.get_model(), 'repa_loss_weight', 0.5)
+                        weighted_repa_loss = repa_loss_weight * repa_loss
+                        print(f"repa loss {repa_loss.item():.4f} (weighted: {weighted_repa_loss.item():.4f})")
+                    else:
+                        print("Warning: DiT intermediate features not captured, REPA loss = 0")
+                        weighted_repa_loss = 0.0
+                else:
+                    weighted_repa_loss = 0.0
 
             print(f"img loss {img_loss}")
-            total_loss = img_loss
+            total_loss = img_loss + weighted_repa_loss
 
         return CausalLMOutputWithPast(
             loss=total_loss,
