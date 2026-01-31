@@ -11,7 +11,7 @@ from tqdm import tqdm
 import json
 Image.MAX_IMAGE_PIXELS = 10000000000
 
-save_dir = ',/GPT-Edit'
+save_dir = './GPT-Edit'
 os.makedirs(save_dir, exist_ok=True)
 data_root = './GPT-Image-Edit-1.5M'
 # see https://github.com/wyhlovecpp/GPT-Image-Edit#data-preparation

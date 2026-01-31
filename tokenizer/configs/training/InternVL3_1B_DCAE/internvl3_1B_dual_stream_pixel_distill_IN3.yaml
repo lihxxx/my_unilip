@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "unilipFT_1b_dual_stream_pixelDis10_224E256_semae316_IN_GAN00k_lr2ex01E1e5_60k"
-    output_dir: "checkpoints/unilipFT_1b_dual_stream_pixelDis10_224E256_semae316_IN_GAN00k_lr2ex01E1e5_60k"
+    name: "stage2_FreezeEnc_1b_dual_stream_GAN25k100k_pixelDis01_Dis01_224E256_semae316_IN_GAN00k_lr1e4x01E1e5_80k"
+    output_dir: "checkpoints/stage2_FreezeEnc_1b_dual_stream_GAN25k100k_pixelDis01_Dis01_224E256_semae316_IN_GAN00k_lr1e4x01E1e5_80k"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 10_000
     eval_every: 10_000
@@ -21,8 +21,8 @@ model:
     mllm_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B"
     dc_ae_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers"
     # Stage2 specific
-    stage1_ckpt: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/UniLIP/1b_unilip.pth"
-    freeze_encoder: False
+    stage1_ckpt: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/unilip_1b_dual_stream_pixel_distill_224_IN_GAN25k/checkpoint-100000/ema_model/pytorch_model.bin"
+    freeze_encoder: True
     output_distill_feat: True
     disable_drop_path: True
     use_gradient_checkpoint: False
@@ -56,11 +56,11 @@ losses:
     # Semantic Distillation loss (for feature alignment with frozen encoder)
     # In dual-stream mode, semantic_feat is used for distillation instead of vit_embeds
     distill_loss: /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B
-    distill_weight: 1.0
+    distill_weight: 0.1
     
     # Pixel Distillation loss (for pixel stream alignment with frozen DC-AE encoder)
     # pixel_latent (32-dim) is compared with DC-AE encoder output
-    pixel_distill_weight: 1.0
+    pixel_distill_weight: 0.1
     
     # Pixel reconstruction loss
     reconstruction_loss: "l2"
@@ -119,6 +119,6 @@ training:
     ddp_find_unused_parameters: False
     use_ema: True
     seed: 42
-    max_train_steps: 60_000
+    max_train_steps: 80_000
     num_generated_images: 8
     max_grad_norm: 1.0

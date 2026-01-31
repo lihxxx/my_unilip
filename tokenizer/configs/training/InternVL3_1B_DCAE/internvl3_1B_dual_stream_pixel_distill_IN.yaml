@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "stage2_1b_dual_stream_GAN25k100k_pixelDis01_Dis01_224E256_semae316_IN_GAN10k_lr1e4x01E1e5_80k"
-    output_dir: "checkpoints/stage2_1b_dual_stream_GAN25k100k_pixelDis01_Dis01_224E256_semae316_IN_GAN10k_lr1e4x01E1e5_80k"
+    name: "stage2_1b_dual_stream_GAN25k100k_pixelDis01_Dis01_224E256_semae316_IN_GAN00k_lr1e4x01E1e5_80k"
+    output_dir: "checkpoints/stage2_1b_dual_stream_GAN25k100k_pixelDis01_Dis01_224E256_semae316_IN_GAN00k_lr1e4x01E1e5_80k"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 10_000
     eval_every: 10_000
@@ -46,7 +46,7 @@ model:
 
 losses:
     name: ReconstructionLoss_Unified
-    discriminator_start: 10_000
+    discriminator_start: 0
     quantizer_weight: 1.0
     discriminator_factor: 1.0
     discriminator_weight: 0.1
