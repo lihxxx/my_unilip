@@ -320,12 +320,22 @@ def train_one_epoch(config, logger, accelerator,
         with accelerator.accumulate([model, loss_module]):
             if model_type == "titok":
                 reconstructed_images, extra_results_dict = model(images)
+                
+                # Get last layer for adaptive weight calculation
+                unwrapped_model = accelerator.unwrap_model(model)
+                last_layer = None
+                if hasattr(unwrapped_model, 'down_mlp'):
+                    last_layer = unwrapped_model.down_mlp[-1].weight
+                elif hasattr(unwrapped_model, 'fusion_layer'):
+                    last_layer = unwrapped_model.fusion_layer[-1].weight
+                
                 autoencoder_loss, loss_dict = loss_module(
                     images,
                     reconstructed_images,
                     extra_results_dict,
                     global_step,
                     mode="generator",
+                    last_layer=last_layer,
                 )
             else:
                 raise NotImplementedError

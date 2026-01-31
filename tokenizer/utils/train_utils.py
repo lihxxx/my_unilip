@@ -345,12 +345,25 @@ def train_one_epoch(config, logger, accelerator,
         with accelerator.accumulate([model, loss_module]):
             if model_type in ["titok", "DC_AE_ViT", "DC_AE_ViT_Unified"]:
                 reconstructed_images, extra_results_dict = model(images)
+                
+                # Get last layer for adaptive weight calculation
+                # For DC_AE_ViT_Unified, use the last layer of down_mlp
+                unwrapped_model = accelerator.unwrap_model(model)
+                last_layer = None
+                if hasattr(unwrapped_model, 'down_mlp'):
+                    # down_mlp is nn.Sequential, get the last Linear layer's weight
+                    last_layer = unwrapped_model.down_mlp[-1].weight
+                elif hasattr(unwrapped_model, 'fusion_layer'):
+                    # For dual-stream, use fusion_layer's last layer
+                    last_layer = unwrapped_model.fusion_layer[-1].weight
+                
                 autoencoder_loss, loss_dict = loss_module(
                     images,
                     reconstructed_images,
                     extra_results_dict,
                     global_step,
                     mode="generator",
+                    last_layer=last_layer,
                 )
             else:
                 raise NotImplementedError(f"Model type {model_type} not supported")

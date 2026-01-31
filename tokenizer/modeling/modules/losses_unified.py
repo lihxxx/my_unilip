@@ -16,6 +16,7 @@ limitations under the License.
 
 Ref:
     https://github.com/CompVis/taming-transformers/blob/master/taming/modules/losses/vqperceptual.py
+    https://github.com/svg-project/SVG (VF Loss and adaptive weight)
 """
 from typing import Mapping, Text, Tuple
 
@@ -23,6 +24,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.cuda.amp import autocast
+from einops import rearrange
 
 from .perceptual_loss import PerceptualLoss
 from .discriminator import NLayerDiscriminator
@@ -49,6 +51,75 @@ def compute_lecam_loss(
     return lecam_loss
 
 
+def compute_vf_loss(
+    z: torch.Tensor, 
+    aux_feature: torch.Tensor,
+    distmat_margin: float = 0.0,
+    cos_margin: float = 0.0,
+    distmat_weight: float = 1.0,
+    cos_weight: float = 1.0
+) -> Tuple[torch.Tensor, dict]:
+    """
+    Compute Visual Feature (VF) Loss for pixel stream.
+    Reference: SVG (https://github.com/svg-project/SVG)
+    
+    VF Loss consists of two parts:
+    1. Distance Matrix Loss: Preserves pairwise similarity structure between patches
+    2. Cosine Similarity Loss: Direct feature alignment at each position
+    
+    Args:
+        z: Latent features (B, N, C) or (B, C, H, W)
+        aux_feature: Reference features (B, N, C) or (B, C, H, W)
+        distmat_margin: Margin for distance matrix loss
+        cos_margin: Margin for cosine similarity loss
+        distmat_weight: Weight for distance matrix loss
+        cos_weight: Weight for cosine similarity loss
+        
+    Returns:
+        vf_loss: Combined VF loss
+        loss_dict: Dictionary containing individual loss components
+    """
+    # Handle different input shapes
+    if len(z.shape) == 4:
+        # (B, C, H, W) -> (B, C, H*W)
+        z_flat = rearrange(z, 'b c h w -> b c (h w)')
+        aux_flat = rearrange(aux_feature, 'b c h w -> b c (h w)')
+    else:
+        # (B, N, C) -> (B, C, N)
+        z_flat = z.permute(0, 2, 1).contiguous()
+        aux_flat = aux_feature.permute(0, 2, 1).contiguous()
+    
+    # Normalize along channel dimension
+    z_norm = F.normalize(z_flat, dim=1)
+    aux_norm = F.normalize(aux_flat, dim=1)
+    
+    # 1. Distance Matrix Loss - preserves pairwise similarity structure
+    # Compute patch-to-patch similarity matrices
+    z_cos_sim = torch.einsum('bci,bcj->bij', z_norm, z_norm)  # (B, N, N)
+    aux_cos_sim = torch.einsum('bci,bcj->bij', aux_norm, aux_norm)  # (B, N, N)
+    
+    diff = torch.abs(z_cos_sim - aux_cos_sim)
+    vf_loss_distmat = F.relu(diff - distmat_margin).mean()
+    
+    # 2. Cosine Similarity Loss - direct position-wise alignment
+    if len(z.shape) == 4:
+        cos_sim = F.cosine_similarity(aux_feature, z, dim=1)  # (B, H, W)
+    else:
+        cos_sim = F.cosine_similarity(aux_feature, z, dim=-1)  # (B, N)
+    vf_loss_cos = F.relu(1.0 - cos_margin - cos_sim).mean()
+    
+    # Combined VF loss
+    vf_loss = distmat_weight * vf_loss_distmat + cos_weight * vf_loss_cos
+    
+    loss_dict = {
+        'vf_loss_distmat': vf_loss_distmat.detach(),
+        'vf_loss_cos': vf_loss_cos.detach(),
+        'vf_loss_total': vf_loss.detach()
+    }
+    
+    return vf_loss, loss_dict
+
+
 class ReconstructionLoss_Unified(torch.nn.Module):
     """
     Unified reconstruction loss supporting all training stages.
@@ -65,6 +136,8 @@ class ReconstructionLoss_Unified(torch.nn.Module):
         losses.semantic_recon_weight: float - Weight for semantic reconstruction loss (PS-VAE)
         losses.semantic_kl_weight: float - Weight for semantic KL loss (PS-VAE)
         losses.pixel_distill_weight: float - Weight for pixel distillation loss (dual-stream)
+        losses.vf_loss_weight: float - Weight for VF loss (pixel stream structure preservation)
+        losses.use_adaptive_weight: bool - Enable adaptive weight for losses
     """
     
     def __init__(self, config):
@@ -109,6 +182,29 @@ class ReconstructionLoss_Unified(torch.nn.Module):
         self.use_dual_stream = config.model.get("use_dual_stream", False)
         self.pixel_distill_weight = loss_config.get("pixel_distill_weight", 0.0)
         
+        # VF Loss config (for pixel stream structure preservation)
+        # Reference: SVG (https://github.com/svg-project/SVG)
+        self.vf_loss_weight = loss_config.get("vf_loss_weight", 0.0)
+        self.vf_distmat_weight = loss_config.get("vf_distmat_weight", 1.0)
+        self.vf_cos_weight = loss_config.get("vf_cos_weight", 1.0)
+        self.vf_distmat_margin = loss_config.get("vf_distmat_margin", 0.0)
+        self.vf_cos_margin = loss_config.get("vf_cos_margin", 0.0)
+        self.use_vf_loss = self.use_dual_stream and self.vf_loss_weight > 0.0
+        if self.use_vf_loss:
+            print(f"VF Loss enabled with weight {self.vf_loss_weight}, "
+                  f"distmat_weight={self.vf_distmat_weight}, cos_weight={self.vf_cos_weight}")
+        
+        # Adaptive weight config (reference: SVG)
+        # Dynamically adjust loss weights based on gradient norms
+        self.use_adaptive_weight = loss_config.get("use_adaptive_weight", False)
+        self.adaptive_vf_weight = loss_config.get("adaptive_vf_weight", False)
+        self.adaptive_distill_weight = loss_config.get("adaptive_distill_weight", False)
+        self.adaptive_pixel_distill_weight = loss_config.get("adaptive_pixel_distill_weight", False)
+        self.adaptive_weight_max = loss_config.get("adaptive_weight_max", 1e4)
+        if self.use_adaptive_weight:
+            print(f"Adaptive weight enabled: vf={self.adaptive_vf_weight}, "
+                  f"distill={self.adaptive_distill_weight}, pixel_distill={self.adaptive_pixel_distill_weight}")
+        
         # Distillation loss (optional, for stage2)
         # When semantic AE is enabled, distill_loss also computes semantic reconstruction loss
         # When dual stream is enabled, distill_loss also computes pixel distillation loss
@@ -146,6 +242,42 @@ class ReconstructionLoss_Unified(torch.nn.Module):
         self.semantic_kl_loss = None
 
         self.config = config
+    
+    def calculate_adaptive_weight(
+        self, 
+        base_loss: torch.Tensor, 
+        aux_loss: torch.Tensor, 
+        last_layer: torch.Tensor,
+        base_weight: float = 1.0
+    ) -> torch.Tensor:
+        """
+        Calculate adaptive weight for auxiliary loss based on gradient norms.
+        Reference: SVG (https://github.com/svg-project/SVG)
+        
+        The weight is computed as: base_weight * ||grad(base_loss)|| / ||grad(aux_loss)||
+        This balances the auxiliary loss to have similar gradient magnitude as the base loss.
+        
+        Args:
+            base_loss: The reference loss (e.g., reconstruction loss)
+            aux_loss: The auxiliary loss to be weighted (e.g., vf_loss, distill_loss)
+            last_layer: The layer to compute gradients w.r.t.
+            base_weight: Base weight multiplier
+            
+        Returns:
+            Adaptive weight for the auxiliary loss
+        """
+        try:
+            base_grads = torch.autograd.grad(base_loss, last_layer, retain_graph=True)[0]
+            aux_grads = torch.autograd.grad(aux_loss, last_layer, retain_graph=True)[0]
+            
+            adaptive_weight = torch.norm(base_grads) / (torch.norm(aux_grads) + 1e-4)
+            adaptive_weight = torch.clamp(adaptive_weight, 0.0, self.adaptive_weight_max).detach()
+            adaptive_weight = adaptive_weight * base_weight
+            
+            return adaptive_weight
+        except RuntimeError:
+            # If gradient computation fails (e.g., during eval), return base weight
+            return torch.tensor(base_weight, device=base_loss.device)
 
     @autocast(enabled=False)
     def forward(self,
@@ -154,13 +286,23 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 extra_result_dict: Mapping[Text, torch.Tensor],
                 global_step: int,
                 mode: str = "generator",
+                last_layer: torch.Tensor = None,
                 ) -> Tuple[torch.Tensor, Mapping[Text, torch.Tensor]]:
-        """Forward pass."""
+        """Forward pass.
+        
+        Args:
+            inputs: Input images
+            reconstructions: Reconstructed images
+            extra_result_dict: Dictionary containing extra outputs from encoder
+            global_step: Current training step
+            mode: "generator" or "discriminator"
+            last_layer: Last layer of encoder for adaptive weight calculation
+        """
         inputs = inputs.float()
         reconstructions = reconstructions.float()
 
         if mode == "generator":
-            return self._forward_generator(inputs, reconstructions, extra_result_dict, global_step)
+            return self._forward_generator(inputs, reconstructions, extra_result_dict, global_step, last_layer)
         elif mode == "discriminator":
             return self._forward_discriminator(inputs, reconstructions, global_step)
         else:
@@ -188,7 +330,8 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                            inputs: torch.Tensor,
                            reconstructions: torch.Tensor,
                            extra_result_dict: Mapping[Text, torch.Tensor],
-                           global_step: int
+                           global_step: int,
+                           last_layer: torch.Tensor = None,
                            ) -> Tuple[torch.Tensor, Mapping[Text, torch.Tensor]]:
         """Generator training step."""
         inputs = inputs.contiguous()
@@ -197,17 +340,20 @@ class ReconstructionLoss_Unified(torch.nn.Module):
         # Normalize inputs
         inputs_norm, reconstructions_norm = self._normalize_inputs(inputs, reconstructions)
 
-        # Compute reconstruction loss
+        # Compute reconstruction loss (used as base for adaptive weight)
         if self.reconstruction_loss == "l1":
             reconstruction_loss = F.l1_loss(inputs_norm, reconstructions_norm, reduction="mean")
         elif self.reconstruction_loss == "l2":
             reconstruction_loss = F.mse_loss(inputs_norm, reconstructions_norm, reduction="mean")
         else:
             raise ValueError(f"Unsupported reconstruction_loss {self.reconstruction_loss}")
-        reconstruction_loss *= self.reconstruction_weight
+        reconstruction_loss_weighted = reconstruction_loss * self.reconstruction_weight
 
         # Compute perceptual loss
         perceptual_loss = self.perceptual_loss(inputs_norm, reconstructions_norm).mean()
+        
+        # Base loss for adaptive weight calculation (reconstruction + perceptual)
+        base_loss_for_adaptive = reconstruction_loss_weighted + self.perceptual_weight * perceptual_loss
 
         # Compute distillation loss, semantic reconstruction loss, and pixel distill loss if enabled
         distill_loss = torch.tensor(0.0).to(inputs.device)
@@ -229,6 +375,23 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 inputs_norm, out_feat, semantic_reconstructed, pixel_latent
             )
             semantic_loss_dict.update(distill_loss_dict)
+        
+        # Compute VF Loss for pixel stream if enabled
+        vf_loss = torch.tensor(0.0).to(inputs.device)
+        vf_loss_dict = {}
+        if self.use_vf_loss and 'pixel_latent' in extra_result_dict:
+            pixel_latent = extra_result_dict['pixel_latent']
+            # Get DC-AE target from distill_loss module
+            if self.distill_loss is not None and hasattr(self.distill_loss, 'dc_ae_encoder'):
+                with torch.no_grad():
+                    dc_ae_target = self.distill_loss.get_dc_ae_features(inputs_norm)
+                vf_loss, vf_loss_dict = compute_vf_loss(
+                    pixel_latent, dc_ae_target,
+                    distmat_margin=self.vf_distmat_margin,
+                    cos_margin=self.vf_cos_margin,
+                    distmat_weight=self.vf_distmat_weight,
+                    cos_weight=self.vf_cos_weight
+                )
 
         # Compute discriminator loss
         generator_loss = torch.zeros((), device=inputs.device)
@@ -242,16 +405,41 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             generator_loss = -torch.mean(logits_fake)
 
         d_weight *= self.discriminator_weight
+        
+        # Calculate adaptive weights if enabled
+        adaptive_distill_w = self.distill_weight
+        adaptive_pixel_distill_w = self.pixel_distill_weight
+        adaptive_vf_w = self.vf_loss_weight
+        
+        if self.use_adaptive_weight and last_layer is not None and self.training:
+            # Adaptive weight for semantic distillation loss
+            if self.adaptive_distill_weight and self.use_distill and distill_loss.requires_grad:
+                adaptive_distill_w = self.calculate_adaptive_weight(
+                    base_loss_for_adaptive, distill_loss, last_layer, self.distill_weight
+                )
+            
+            # Adaptive weight for pixel distillation loss
+            if self.adaptive_pixel_distill_weight and self.use_dual_stream and self.pixel_distill_weight > 0.0:
+                if pixel_distill_loss.requires_grad:
+                    adaptive_pixel_distill_w = self.calculate_adaptive_weight(
+                        base_loss_for_adaptive, pixel_distill_loss, last_layer, self.pixel_distill_weight
+                    )
+            
+            # Adaptive weight for VF loss
+            if self.adaptive_vf_weight and self.use_vf_loss and vf_loss.requires_grad:
+                adaptive_vf_w = self.calculate_adaptive_weight(
+                    base_loss_for_adaptive, vf_loss, last_layer, self.vf_loss_weight
+                )
 
         # Build total loss based on quantize mode
         if self.quantize_mode == "vq":
             # VQ mode
             quantizer_loss = extra_result_dict.get("quantizer_loss", torch.tensor(0.0).to(inputs.device))
             total_loss = (
-                reconstruction_loss
+                reconstruction_loss_weighted
                 + self.perceptual_weight * perceptual_loss
                 + self.quantizer_weight * quantizer_loss
-                + self.distill_weight * distill_loss
+                + adaptive_distill_w * distill_loss
                 + d_weight * discriminator_factor * generator_loss
             )
             
@@ -261,11 +449,15 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             
             # Add pixel distillation loss if dual-stream is enabled
             if self.use_dual_stream and self.pixel_distill_weight > 0.0:
-                total_loss = total_loss + self.pixel_distill_weight * pixel_distill_loss
+                total_loss = total_loss + adaptive_pixel_distill_w * pixel_distill_loss
+            
+            # Add VF loss if enabled
+            if self.use_vf_loss:
+                total_loss = total_loss + adaptive_vf_w * vf_loss
             
             loss_dict = dict(
                 total_loss=total_loss.clone().detach(),
-                reconstruction_loss=reconstruction_loss.detach(),
+                reconstruction_loss=reconstruction_loss_weighted.detach(),
                 perceptual_loss=(self.perceptual_weight * perceptual_loss).detach(),
                 quantizer_loss=(self.quantizer_weight * quantizer_loss).detach(),
                 weighted_gan_loss=(d_weight * discriminator_factor * generator_loss).detach(),
@@ -276,7 +468,13 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 gan_loss=generator_loss.detach(),
             )
             if self.use_distill:
-                loss_dict["distill_loss"] = (self.distill_weight * distill_loss).detach()
+                loss_dict["distill_loss"] = (adaptive_distill_w * distill_loss).detach()
+                # Record adaptive weight only if enabled
+                if self.use_adaptive_weight and self.adaptive_distill_weight:
+                    if isinstance(adaptive_distill_w, torch.Tensor):
+                        loss_dict["adaptive_distill_weight"] = adaptive_distill_w.detach()
+                    else:
+                        loss_dict["adaptive_distill_weight"] = torch.tensor(adaptive_distill_w)
             
             # Add semantic AE loss to dict if enabled (without KL)
             if self.use_semantic_ae:
@@ -287,15 +485,30 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             
             # Add pixel distillation loss to dict if dual-stream is enabled
             if self.use_dual_stream and self.pixel_distill_weight > 0.0:
-                loss_dict["pixel_distill_loss"] = (self.pixel_distill_weight * pixel_distill_loss).detach()
-                # Add raw pixel distill loss from distill_loss_dict
-                for k, v in semantic_loss_dict.items():
-                    if 'pixel' in k:
-                        loss_dict[k] = v
+                loss_dict["pixel_distill_loss"] = (adaptive_pixel_distill_w * pixel_distill_loss).detach()
+                # Record adaptive weight only if enabled
+                if self.use_adaptive_weight and self.adaptive_pixel_distill_weight:
+                    if isinstance(adaptive_pixel_distill_w, torch.Tensor):
+                        loss_dict["adaptive_pixel_distill_weight"] = adaptive_pixel_distill_w.detach()
+                    else:
+                        loss_dict["adaptive_pixel_distill_weight"] = torch.tensor(adaptive_pixel_distill_w)
+            
+            # Add VF loss to dict if enabled
+            if self.use_vf_loss:
+                loss_dict["vf_loss"] = (adaptive_vf_w * vf_loss).detach()
+                # Record adaptive weight only if enabled
+                if self.use_adaptive_weight and self.adaptive_vf_weight:
+                    if isinstance(adaptive_vf_w, torch.Tensor):
+                        loss_dict["adaptive_vf_weight"] = adaptive_vf_w.detach()
+                    else:
+                        loss_dict["adaptive_vf_weight"] = torch.tensor(adaptive_vf_w)
+                # Add detailed VF loss components
+                for k, v in vf_loss_dict.items():
+                    loss_dict[k] = v
                 
         elif self.quantize_mode == "vae":
             # VAE mode
-            reconstruction_loss = reconstruction_loss / torch.exp(self.logvar)
+            reconstruction_loss_vae = reconstruction_loss_weighted / torch.exp(self.logvar)
             if self.kl_weight > 0.0 and 'posteriors' in extra_result_dict:
                 posteriors = extra_result_dict['posteriors']
                 kl_loss = posteriors.kl()
@@ -304,9 +517,9 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 kl_loss = torch.tensor(0.0).to(inputs.device)
             
             total_loss = (
-                reconstruction_loss
+                reconstruction_loss_vae
                 + self.perceptual_weight * perceptual_loss
-                + self.distill_weight * distill_loss
+                + adaptive_distill_w * distill_loss
                 + self.kl_weight * kl_loss
                 + d_weight * discriminator_factor * generator_loss
             )
@@ -317,11 +530,15 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             
             # Add pixel distillation loss if dual-stream is enabled
             if self.use_dual_stream and self.pixel_distill_weight > 0.0:
-                total_loss = total_loss + self.pixel_distill_weight * pixel_distill_loss
+                total_loss = total_loss + adaptive_pixel_distill_w * pixel_distill_loss
+            
+            # Add VF loss if enabled
+            if self.use_vf_loss:
+                total_loss = total_loss + adaptive_vf_w * vf_loss
             
             loss_dict = dict(
                 total_loss=total_loss.clone().detach(),
-                reconstruction_loss=reconstruction_loss.detach(),
+                reconstruction_loss=reconstruction_loss_vae.detach(),
                 perceptual_loss=(self.perceptual_weight * perceptual_loss).detach(),
                 kl_loss=(self.kl_weight * kl_loss).detach(),
                 weighted_gan_loss=(d_weight * discriminator_factor * generator_loss).detach(),
@@ -330,7 +547,13 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 gan_loss=generator_loss.detach(),
             )
             if self.use_distill:
-                loss_dict["distill_loss"] = (self.distill_weight * distill_loss).detach()
+                loss_dict["distill_loss"] = (adaptive_distill_w * distill_loss).detach()
+                # Record adaptive weight only if enabled
+                if self.use_adaptive_weight and self.adaptive_distill_weight:
+                    if isinstance(adaptive_distill_w, torch.Tensor):
+                        loss_dict["adaptive_distill_weight"] = adaptive_distill_w.detach()
+                    else:
+                        loss_dict["adaptive_distill_weight"] = torch.tensor(adaptive_distill_w)
             
             # Add semantic AE loss to dict if enabled (without KL)
             if self.use_semantic_ae:
@@ -341,11 +564,26 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             
             # Add pixel distillation loss to dict if dual-stream is enabled
             if self.use_dual_stream and self.pixel_distill_weight > 0.0:
-                loss_dict["pixel_distill_loss"] = (self.pixel_distill_weight * pixel_distill_loss).detach()
-                # Add raw pixel distill loss from distill_loss_dict
-                for k, v in semantic_loss_dict.items():
-                    if 'pixel' in k:
-                        loss_dict[k] = v
+                loss_dict["pixel_distill_loss"] = (adaptive_pixel_distill_w * pixel_distill_loss).detach()
+                # Record adaptive weight only if enabled
+                if self.use_adaptive_weight and self.adaptive_pixel_distill_weight:
+                    if isinstance(adaptive_pixel_distill_w, torch.Tensor):
+                        loss_dict["adaptive_pixel_distill_weight"] = adaptive_pixel_distill_w.detach()
+                    else:
+                        loss_dict["adaptive_pixel_distill_weight"] = torch.tensor(adaptive_pixel_distill_w)
+            
+            # Add VF loss to dict if enabled
+            if self.use_vf_loss:
+                loss_dict["vf_loss"] = (adaptive_vf_w * vf_loss).detach()
+                # Record adaptive weight only if enabled
+                if self.use_adaptive_weight and self.adaptive_vf_weight:
+                    if isinstance(adaptive_vf_w, torch.Tensor):
+                        loss_dict["adaptive_vf_weight"] = adaptive_vf_w.detach()
+                    else:
+                        loss_dict["adaptive_vf_weight"] = torch.tensor(adaptive_vf_w)
+                # Add detailed VF loss components
+                for k, v in vf_loss_dict.items():
+                    loss_dict[k] = v
         else:
             raise NotImplementedError(f"quantize_mode {self.quantize_mode} not supported")
 

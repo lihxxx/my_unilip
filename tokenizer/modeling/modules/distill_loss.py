@@ -359,3 +359,25 @@ class DistillLoss(torch.nn.Module):
             pixel_distill_loss = self._compute_pixel_distill_loss(ref_pixel_feat, pixel_latent)
 
         return distill_loss, semantic_recon_loss, pixel_distill_loss, loss_dict
+    
+    def get_dc_ae_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Get DC-AE encoder features for VF Loss computation.
+        
+        This is a public interface to access DC-AE features from external modules.
+        
+        Args:
+            x: Input image tensor (B, C, H, W), normalized to [0, 1].
+            
+        Returns:
+            DC-AE features (B, N, 32) if DC-AE encoder is available, None otherwise.
+        """
+        if not self.use_pixel_distill or not hasattr(self, 'ref_dc_ae_encoder'):
+            return None
+        return self._get_pixel_ref_features(x)
+    
+    @property
+    def dc_ae_encoder(self):
+        """Property to check if DC-AE encoder is available."""
+        if hasattr(self, 'ref_dc_ae_encoder'):
+            return self.ref_dc_ae_encoder
+        return None
