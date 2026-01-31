@@ -205,6 +205,13 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             print(f"Adaptive weight enabled: vf={self.adaptive_vf_weight}, "
                   f"distill={self.adaptive_distill_weight}, pixel_distill={self.adaptive_pixel_distill_weight}")
         
+        # Layer-wise distillation config (UniFlow style)
+        # Reference: https://arxiv.org/pdf/2510.10575
+        self.use_layerwise_distill = config.model.get("use_layerwise_distill", False)
+        self.layerwise_beta = loss_config.get("layerwise_distill_beta", 2.0)
+        self.layerwise_distill_layers = config.model.get("layerwise_distill_layers", None)
+        self.layerwise_distill_weight = loss_config.get("layerwise_distill_weight", 1.0)
+        
         # Distillation loss (optional, for stage2)
         # When semantic AE is enabled, distill_loss also computes semantic reconstruction loss
         # When dual stream is enabled, distill_loss also computes pixel distillation loss
@@ -226,9 +233,16 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 semantic_l2_weight=semantic_l2_weight,
                 semantic_cosine_weight=semantic_cosine_weight,
                 use_pixel_distill=use_pixel_distill,
-                dc_ae_path=dc_ae_path
+                dc_ae_path=dc_ae_path,
+                use_layerwise_distill=self.use_layerwise_distill,
+                layerwise_beta=self.layerwise_beta,
+                layerwise_distill_layers=self.layerwise_distill_layers
             ).eval()
             print(f"Distillation loss enabled with weight {self.distill_weight}")
+            if self.use_layerwise_distill:
+                print(f"Layer-wise Adaptive Self-Distillation enabled (UniFlow style)")
+                print(f"  - Beta: {self.layerwise_beta}")
+                print(f"  - Layers: {self.layerwise_distill_layers if self.layerwise_distill_layers else 'all'}")
             if self.use_semantic_ae:
                 print(f"Semantic reconstruction loss enabled: recon_weight={self.semantic_recon_weight}, "
                       f"l2_weight={semantic_l2_weight}, cosine_weight={semantic_cosine_weight}")
@@ -357,6 +371,7 @@ class ReconstructionLoss_Unified(torch.nn.Module):
 
         # Compute distillation loss, semantic reconstruction loss, and pixel distill loss if enabled
         distill_loss = torch.tensor(0.0).to(inputs.device)
+        layerwise_distill_loss = torch.tensor(0.0).to(inputs.device)
         semantic_recon_loss = torch.tensor(0.0).to(inputs.device)
         pixel_distill_loss = torch.tensor(0.0).to(inputs.device)
         semantic_loss_dict = {}
@@ -370,9 +385,14 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             # Get pixel_latent if dual-stream is enabled
             pixel_latent = extra_result_dict.get('pixel_latent', None)
             
-            # Compute distillation loss (and semantic recon loss and pixel distill loss if enabled)
-            distill_loss, semantic_recon_loss, pixel_distill_loss, distill_loss_dict = self.distill_loss(
-                inputs_norm, out_feat, semantic_reconstructed, pixel_latent
+            # Get layer-wise features if layer-wise distillation is enabled
+            student_layer_features = extra_result_dict.get('layer_features', None)
+            
+            # Compute distillation losses:
+            # - distill_loss: semantic_feat (dual-stream) vs frozen encoder
+            # - layerwise_distill_loss: ViT encoder layers vs frozen encoder layers (independent)
+            distill_loss, layerwise_distill_loss, semantic_recon_loss, pixel_distill_loss, distill_loss_dict = self.distill_loss(
+                inputs_norm, out_feat, semantic_reconstructed, pixel_latent, student_layer_features
             )
             semantic_loss_dict.update(distill_loss_dict)
         
@@ -443,6 +463,11 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 + d_weight * discriminator_factor * generator_loss
             )
             
+            # Add layer-wise distillation loss if enabled (independent of distill_loss)
+            # This loss aligns ViT encoder layers with frozen encoder layers
+            if self.use_layerwise_distill and self.layerwise_distill_weight > 0.0:
+                total_loss = total_loss + self.layerwise_distill_weight * layerwise_distill_loss
+            
             # Add semantic AE loss if enabled (without KL)
             if self.use_semantic_ae:
                 total_loss = total_loss + self.semantic_recon_weight * semantic_recon_loss
@@ -476,12 +501,21 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                     else:
                         loss_dict["adaptive_distill_weight"] = torch.tensor(adaptive_distill_w)
             
+            # Add layer-wise distillation loss to dict if enabled
+            if self.use_layerwise_distill and self.layerwise_distill_weight > 0.0:
+                loss_dict["layerwise_distill_loss"] = (self.layerwise_distill_weight * layerwise_distill_loss).detach()
+                # Add detailed layer-wise loss components from semantic_loss_dict
+                for k, v in semantic_loss_dict.items():
+                    if k.startswith('layerwise_'):
+                        loss_dict[k] = v
+            
             # Add semantic AE loss to dict if enabled (without KL)
             if self.use_semantic_ae:
                 loss_dict["semantic_recon_loss"] = (self.semantic_recon_weight * semantic_recon_loss).detach()
                 # Add detailed semantic loss components
                 for k, v in semantic_loss_dict.items():
-                    loss_dict[k] = v
+                    if not k.startswith('layerwise_'):
+                        loss_dict[k] = v
             
             # Add pixel distillation loss to dict if dual-stream is enabled
             if self.use_dual_stream and self.pixel_distill_weight > 0.0:
@@ -524,6 +558,10 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 + d_weight * discriminator_factor * generator_loss
             )
             
+            # Add layer-wise distillation loss if enabled (independent of distill_loss)
+            if self.use_layerwise_distill and self.layerwise_distill_weight > 0.0:
+                total_loss = total_loss + self.layerwise_distill_weight * layerwise_distill_loss
+            
             # Add semantic AE loss if enabled (without KL)
             if self.use_semantic_ae:
                 total_loss = total_loss + self.semantic_recon_weight * semantic_recon_loss
@@ -555,12 +593,21 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                     else:
                         loss_dict["adaptive_distill_weight"] = torch.tensor(adaptive_distill_w)
             
+            # Add layer-wise distillation loss to dict if enabled
+            if self.use_layerwise_distill and self.layerwise_distill_weight > 0.0:
+                loss_dict["layerwise_distill_loss"] = (self.layerwise_distill_weight * layerwise_distill_loss).detach()
+                # Add detailed layer-wise loss components from semantic_loss_dict
+                for k, v in semantic_loss_dict.items():
+                    if k.startswith('layerwise_'):
+                        loss_dict[k] = v
+            
             # Add semantic AE loss to dict if enabled (without KL)
             if self.use_semantic_ae:
                 loss_dict["semantic_recon_loss"] = (self.semantic_recon_weight * semantic_recon_loss).detach()
                 # Add detailed semantic loss components
                 for k, v in semantic_loss_dict.items():
-                    loss_dict[k] = v
+                    if not k.startswith('layerwise_'):
+                        loss_dict[k] = v
             
             # Add pixel distillation loss to dict if dual-stream is enabled
             if self.use_dual_stream and self.pixel_distill_weight > 0.0:

@@ -17,6 +17,7 @@ limitations under the License.
 References:
     - PS-VAE: https://arxiv.org/pdf/2512.17909
     - Semantic reconstruction loss combines L2 loss and cosine similarity loss
+    - UniFlow: Layer-wise Adaptive Self-Distillation (https://arxiv.org/pdf/2510.10575)
 """
 
 import torch
@@ -25,7 +26,7 @@ from transformers import AutoTokenizer, AutoModel
 from diffusers.models import AutoencoderDC
 import math
 import os
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List
 
 
 def mean_flat(x):
@@ -146,6 +147,12 @@ class DistillLoss(torch.nn.Module):
     features that match the frozen reference encoder's output.
     
     For dual-stream mode, also supports pixel distillation loss using DC-AE encoder.
+    
+    Supports Layer-wise Adaptive Self-Distillation (UniFlow):
+    - Reference: https://arxiv.org/pdf/2510.10575
+    - Distills features from all encoder layers with adaptive weights
+    - Deeper layers get higher base weights (preserve semantic capability)
+    - Poorly aligned layers get additional penalty weight
     """
     
     def __init__(self, model_name: str = "OpenGVLab/InternVL3-1B",
@@ -153,7 +160,10 @@ class DistillLoss(torch.nn.Module):
                  semantic_l2_weight: float = 1.0,
                  semantic_cosine_weight: float = 0.5,
                  use_pixel_distill: bool = False,
-                 dc_ae_path: Optional[str] = None):
+                 dc_ae_path: Optional[str] = None,
+                 use_layerwise_distill: bool = False,
+                 layerwise_beta: float = 2.0,
+                 layerwise_distill_layers: Optional[List[int]] = None):
         """Initializes the Distill class.
 
         Args:
@@ -163,6 +173,11 @@ class DistillLoss(torch.nn.Module):
             semantic_cosine_weight: Weight for cosine similarity component.
             use_pixel_distill: Whether to compute pixel distillation loss using DC-AE encoder.
             dc_ae_path: Path to DC-AE model for pixel distillation.
+            use_layerwise_distill: Whether to use layer-wise adaptive self-distillation (UniFlow style).
+            layerwise_beta: Temperature parameter for adaptive weight calculation. 
+                           Higher beta emphasizes poorly aligned layers more.
+            layerwise_distill_layers: List of layer indices to use for distillation.
+                                     If None, uses all layers.
         """
         super().__init__()
         model = AutoModel.from_pretrained(
@@ -173,6 +188,9 @@ class DistillLoss(torch.nn.Module):
             trust_remote_code=True)
         self.ref_vit = model.vision_model
         self.ref_mlp1 = model.mlp1
+        
+        # Get number of encoder layers
+        self.num_layers = len(self.ref_vit.encoder.layers)
 
         for param in self.parameters():
             param.requires_grad = False
@@ -181,6 +199,23 @@ class DistillLoss(torch.nn.Module):
         self.use_semantic_loss = use_semantic_loss
         self.semantic_l2_weight = semantic_l2_weight
         self.semantic_cosine_weight = semantic_cosine_weight
+        
+        # Layer-wise distillation config (UniFlow style)
+        self.use_layerwise_distill = use_layerwise_distill
+        self.layerwise_beta = layerwise_beta
+        
+        # Determine which layers to use for distillation
+        if layerwise_distill_layers is not None:
+            self.distill_layers = layerwise_distill_layers
+        else:
+            # Use all layers by default
+            self.distill_layers = list(range(self.num_layers))
+        
+        if use_layerwise_distill:
+            print(f"Layer-wise Adaptive Self-Distillation enabled:")
+            print(f"  - Total encoder layers: {self.num_layers}")
+            print(f"  - Distillation layers: {self.distill_layers}")
+            print(f"  - Beta (temperature): {layerwise_beta}")
         
         # Pixel distillation config
         self.use_pixel_distill = use_pixel_distill
@@ -221,6 +256,121 @@ class DistillLoss(torch.nn.Module):
             vit_embeds = self.ref_mlp1(vit_embeds)
         
         return vit_embeds
+    
+    def _get_layerwise_ref_features(self, x: torch.Tensor) -> List[torch.Tensor]:
+        """Extract layer-wise features from frozen reference encoder.
+        
+        Reference: UniFlow (https://arxiv.org/pdf/2510.10575)
+        
+        Args:
+            x: Input image tensor (B, C, H, W), normalized to [0, 1].
+            
+        Returns:
+            List of reference features for each layer (B, N, D).
+        """
+        # x is in [0,1], need imgnet normalize
+        std = torch.tensor([0.229, 0.224, 0.225]).to(x.device)
+        mean = torch.tensor([0.485, 0.456, 0.406]).to(x.device)
+        mean = mean[None, :, None, None]
+        std = std[None, :, None, None]
+        x = (x - mean) / std
+        
+        # Always in eval mode
+        self.eval()
+        layer_features = []
+        with torch.no_grad():
+            vit_embeds = self.ref_vit.embeddings(x)
+            for idx, encoder_layer in enumerate(self.ref_vit.encoder.layers):
+                vit_embeds = encoder_layer(vit_embeds)
+                if idx in self.distill_layers:
+                    # Extract features without CLS token
+                    layer_feat = vit_embeds[:, 1:, :].contiguous().float()
+                    layer_features.append(layer_feat)
+        
+        return layer_features
+    
+    def _compute_layerwise_distill_loss(
+        self, 
+        student_features: List[torch.Tensor], 
+        teacher_features: List[torch.Tensor]
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Compute layer-wise adaptive self-distillation loss.
+        
+        Reference: UniFlow (https://arxiv.org/pdf/2510.10575)
+        
+        The loss is computed as:
+        L_dist = sum_{l} w_l * (1 - cos_sim(H_U^l, H_T^l))
+        
+        where w_l = softmax(w_l^base * exp(beta * alpha_l))
+        - w_l^base = l / L (deeper layers get higher base weight)
+        - alpha_l = 1 - mean(cos_sim) (alignment penalty)
+        - beta: temperature parameter
+        
+        Args:
+            student_features: List of student encoder features [(B, N, D), ...]
+            teacher_features: List of teacher encoder features [(B, N, D), ...]
+            
+        Returns:
+            layerwise_distill_loss: Combined layer-wise distillation loss
+            loss_dict: Dictionary containing layer-wise loss components
+        """
+        assert len(student_features) == len(teacher_features), \
+            f"Student has {len(student_features)} layers, teacher has {len(teacher_features)} layers"
+        
+        num_distill_layers = len(self.distill_layers)
+        device = student_features[0].device
+        
+        # Compute per-layer cosine distance and alignment penalty
+        layer_cos_distances = []  # 1 - cos_sim
+        layer_alphas = []  # alignment penalty
+        
+        for i, (student_feat, teacher_feat) in enumerate(zip(student_features, teacher_features)):
+            # Normalize features
+            student_norm = F.normalize(student_feat, p=2, dim=-1)
+            teacher_norm = F.normalize(teacher_feat, p=2, dim=-1)
+            
+            # Compute cosine similarity per token
+            cos_sim = (student_norm * teacher_norm).sum(dim=-1)  # (B, N)
+            
+            # Cosine distance: 1 - cos_sim
+            cos_distance = (1.0 - cos_sim).mean()  # scalar
+            layer_cos_distances.append(cos_distance)
+            
+            # Alignment penalty: mean of (1 - cos_sim)
+            alpha_l = cos_distance.detach()
+            layer_alphas.append(alpha_l)
+        
+        # Compute adaptive weights
+        # w_l^base = (l + 1) / L (1-indexed, deeper layers get higher weight)
+        base_weights = []
+        for i, layer_idx in enumerate(self.distill_layers):
+            # Use actual layer index for base weight calculation
+            w_base = (layer_idx + 1) / self.num_layers
+            base_weights.append(w_base)
+        
+        base_weights = torch.tensor(base_weights, device=device)
+        layer_alphas_tensor = torch.stack(layer_alphas)
+        
+        # Compute adaptive weights: w_l = softmax(w_l^base * exp(beta * alpha_l))
+        # This emphasizes both deeper layers and poorly aligned layers
+        weighted_scores = base_weights * torch.exp(self.layerwise_beta * layer_alphas_tensor)
+        adaptive_weights = F.softmax(weighted_scores, dim=0)
+        
+        # Compute weighted sum of layer losses
+        total_loss = torch.tensor(0.0, device=device)
+        loss_dict = {}
+        
+        for i, (cos_dist, weight) in enumerate(zip(layer_cos_distances, adaptive_weights)):
+            weighted_loss = weight * cos_dist
+            total_loss = total_loss + weighted_loss
+            
+            layer_idx = self.distill_layers[i]
+            loss_dict[f'layerwise_distill_layer{layer_idx}'] = cos_dist.detach()
+            loss_dict[f'layerwise_weight_layer{layer_idx}'] = weight.detach()
+        
+        loss_dict['layerwise_distill_total'] = total_loss.detach()
+        
+        return total_loss, loss_dict
     
     def _compute_semantic_loss(self, 
                                 ref_feat: torch.Tensor, 
@@ -317,32 +467,55 @@ class DistillLoss(torch.nn.Module):
     
     def forward(self, x: torch.Tensor, out_feat: torch.Tensor, 
                 semantic_reconstructed: torch.Tensor = None,
-                pixel_latent: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
+                pixel_latent: torch.Tensor = None,
+                student_layer_features: Optional[List[torch.Tensor]] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         """Computes the distillation loss and optional semantic/pixel reconstruction loss.
 
         Args:
             x: Input image tensor (B, C, H, W), normalized to [0, 1].
             out_feat: Output features from the trainable encoder (B, N, D).
+                     In dual-stream mode, this is semantic_feat (after semantic_transformer).
             semantic_reconstructed: Reconstructed features from semantic decoder (B, N, D).
                                    Only used when use_semantic_loss=True.
             pixel_latent: Pixel latent from dual-stream model (B, N, 32).
                          Only used when use_pixel_distill=True.
+            student_layer_features: List of layer-wise features from trainable encoder (ViT).
+                                   Only used when use_layerwise_distill=True.
+                                   Note: This is independent of semantic_transformer output.
 
         Returns:
-            distill_loss: The semantic distillation loss.
+            distill_loss: The semantic distillation loss (semantic_feat vs frozen encoder).
+            layerwise_distill_loss: The layer-wise distillation loss (ViT layers vs frozen encoder).
             semantic_recon_loss: The semantic reconstruction loss (0 if not enabled).
             pixel_distill_loss: The pixel distillation loss (0 if not enabled).
             loss_dict: Dictionary containing all loss components.
         """
-        # Get reference features from frozen encoder
+        loss_dict = {}
+        
+        # Get reference features from frozen encoder (always needed for distill_loss)
         ref_feat = self._get_ref_features(x)
         
-        # Compute distillation loss (trainable encoder vs frozen encoder)
+        # Compute standard distillation loss (semantic_feat/out_feat vs frozen encoder)
+        # In dual-stream mode: out_feat is semantic_feat (after semantic_transformer)
+        # This loss ensures semantic_transformer output aligns with frozen encoder
         distill_loss = F.mse_loss(out_feat, ref_feat, reduction="mean")
+        loss_dict['distill_loss_raw'] = distill_loss.detach()
         
-        loss_dict = {
-            'distill_loss_raw': distill_loss.detach(),
-        }
+        # Compute layer-wise distillation loss if enabled (independent of above)
+        # This loss ensures ViT encoder layers align with frozen encoder layers
+        # It does NOT conflict with distill_loss because:
+        # - layerwise_distill: ViT encoder intermediate layers vs frozen ViT layers
+        # - distill_loss: semantic_transformer output vs frozen encoder final output
+        layerwise_distill_loss = torch.tensor(0.0).to(x.device)
+        if self.use_layerwise_distill and student_layer_features is not None:
+            # Get layer-wise reference features from frozen encoder
+            teacher_layer_features = self._get_layerwise_ref_features(x)
+            
+            # Compute layer-wise adaptive distillation loss
+            layerwise_distill_loss, layerwise_loss_dict = self._compute_layerwise_distill_loss(
+                student_layer_features, teacher_layer_features
+            )
+            loss_dict.update(layerwise_loss_dict)
         
         # Compute semantic reconstruction loss if enabled
         semantic_recon_loss = torch.tensor(0.0).to(x.device)
@@ -358,7 +531,7 @@ class DistillLoss(torch.nn.Module):
             ref_pixel_feat = self._get_pixel_ref_features(x)
             pixel_distill_loss = self._compute_pixel_distill_loss(ref_pixel_feat, pixel_latent)
 
-        return distill_loss, semantic_recon_loss, pixel_distill_loss, loss_dict
+        return distill_loss, layerwise_distill_loss, semantic_recon_loss, pixel_distill_loss, loss_dict
     
     def get_dc_ae_features(self, x: torch.Tensor) -> torch.Tensor:
         """Get DC-AE encoder features for VF Loss computation.

@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "1b_dual_stream_pixelDis10_224E256_semae316_IN_GAN30k_lr2ex01_100k"
-    output_dir: "checkpoints/1b_dual_stream_pixelDis10_224E256_semae316_IN_GAN30k_lr2ex01_100k"
+    name: "1b_dual_stream_layerwiseDis1_224E256_semae316_IN_GAN30k_lr2ex01_100k"
+    output_dir: "checkpoints/1b_dual_stream_layerwiseDis1_224E256_semae316_IN_GAN30k_lr2ex01_100k"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 10_000
     eval_every: 10_000
@@ -26,6 +26,14 @@ model:
     output_distill_feat: True
     disable_drop_path: True
     use_gradient_checkpoint: False
+    
+    # Layer-wise Adaptive Self-Distillation (UniFlow style)
+    # Reference: https://arxiv.org/pdf/2510.10575
+    # Distills features from multiple encoder layers with adaptive weights
+    # - Deeper layers get higher base weights (preserve semantic capability)
+    # - Poorly aligned layers get additional penalty weight
+    use_layerwise_distill: True    # Enable layer-wise distillation (set False for single-layer distillation)
+    layerwise_distill_layers: null  # null = use all layers, or specify list like [6, 12, 18, 23]
     
     # Dual Stream configuration with Pixel Distillation
     # Stream 1 (Semantic): vit_embeds -> TransformerEncoder -> semantic_feat (for distill_loss)
@@ -58,9 +66,41 @@ losses:
     distill_loss: /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B
     distill_weight: 1.0
     
+    # Layer-wise Adaptive Self-Distillation parameters (UniFlow style)
+    # Note: layerwise_distill is INDEPENDENT of distill_loss:
+    # - distill_loss: semantic_feat (after semantic_transformer) vs frozen encoder final output
+    # - layerwise_distill: ViT encoder intermediate layers vs frozen encoder layers
+    # Both can be enabled simultaneously for better semantic preservation
+    #
+    # Beta (temperature): Higher values emphasize poorly aligned layers more
+    # - beta=0: Progressive distillation (only use base weight w_l^base = l/L)
+    # - beta=2: Default UniFlow setting, good balance
+    # - beta>3: Over-emphasizes misaligned layers, may cause instability
+    layerwise_distill_beta: 2.0
+    layerwise_distill_weight: 1.0  # Weight for layer-wise distillation loss
+    
     # Pixel Distillation loss (for pixel stream alignment with frozen DC-AE encoder)
     # pixel_latent (32-dim) is compared with DC-AE encoder output
     pixel_distill_weight: 1.0
+    
+    # VF Loss (Visual Feature Loss) for pixel stream structure preservation
+    # Reference: SVG (https://github.com/svg-project/SVG)
+    # Preserves pairwise similarity structure between patches
+    # Note: VF loss values are typically small (~0.01-0.1), so high weight is needed
+    vf_loss_weight: 0.0          # Disabled, set to 100.0 to enable (SVG default=100)
+    vf_distmat_weight: 1.0       # Weight for distance matrix loss
+    vf_cos_weight: 1.0           # Weight for cosine similarity loss
+    vf_distmat_margin: 0.0       # Margin for distance matrix loss
+    vf_cos_margin: 0.0           # Margin for cosine similarity loss
+    
+    # Adaptive weight config (reference: SVG)
+    # Dynamically adjust loss weights based on gradient norms
+    # Weight = base_weight * ||grad(recon_loss)|| / ||grad(aux_loss)||
+    use_adaptive_weight: False    # Disabled - use fixed weights instead
+    adaptive_vf_weight: False     # Use adaptive weight for VF loss
+    adaptive_distill_weight: False # Use adaptive weight for semantic distillation loss
+    adaptive_pixel_distill_weight: False  # Use adaptive weight for pixel distillation loss
+    adaptive_weight_max: 1e4      # Maximum adaptive weight value (not used when disabled)
     
     # Pixel reconstruction loss
     reconstruction_loss: "l2"

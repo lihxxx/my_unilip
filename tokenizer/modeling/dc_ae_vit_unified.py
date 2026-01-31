@@ -255,6 +255,13 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         self.output_distill_feat = config.model.get("output_distill_feat", False)
         self.output_size = config.dataset.preprocessing.crop_size
         
+        # Layer-wise distillation config (UniFlow style)
+        # Reference: https://arxiv.org/pdf/2510.10575
+        self.use_layerwise_distill = config.model.get("use_layerwise_distill", False)
+        self.layerwise_distill_layers = config.model.get("layerwise_distill_layers", None)
+        if self.use_layerwise_distill:
+            print(f"Layer-wise distillation enabled, layers: {self.layerwise_distill_layers}")
+        
         # Padding support for inference with different resolutions
         # Default is False, enable for inference when input resolution differs from training
         self.use_padding = config.model.get("use_padding", False)
@@ -580,12 +587,28 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         If use_padding is enabled (for inference):
         - Pads input to multiple of 28 before encoding
         - Stores padding info for use in decode()
+        
+        If use_layerwise_distill is enabled:
+        - Collects intermediate layer features for layer-wise distillation
         """
         # Apply padding if enabled (for inference with different resolutions)
         if self.use_padding:
             x = self.padding(x)
         
         vit_embeds = self.encoder.embeddings(x)
+        
+        # Determine which layers to collect for layer-wise distillation
+        num_layers = len(self.encoder.encoder.layers)
+        if self.use_layerwise_distill:
+            if self.layerwise_distill_layers is not None:
+                distill_layer_indices = set(self.layerwise_distill_layers)
+            else:
+                distill_layer_indices = set(range(num_layers))
+        else:
+            distill_layer_indices = set()
+        
+        # Collect layer-wise features for distillation
+        layer_features = []
         
         # Process through encoder layers
         for idx, encoder_layer in enumerate(self.encoder.encoder.layers):
@@ -595,6 +618,12 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
                 )
             else:
                 vit_embeds = encoder_layer(vit_embeds)
+            
+            # Collect layer features for layer-wise distillation
+            if idx in distill_layer_indices:
+                # Extract features without CLS token
+                layer_feat = vit_embeds[:, 1:, :].contiguous().float()
+                layer_features.append(layer_feat)
         
         # Remove CLS token and reshape
         vit_embeds = vit_embeds[:, 1:, :].contiguous().float()
@@ -609,6 +638,10 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         
         # Result dictionary for extra outputs
         result_dict = {}
+        
+        # Add layer-wise features for distillation
+        if self.use_layerwise_distill and len(layer_features) > 0:
+            result_dict['layer_features'] = layer_features
         
         if self.use_dual_stream:
             # ============ Dual Stream Architecture ============
