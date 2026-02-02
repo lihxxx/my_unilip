@@ -45,13 +45,40 @@ losses:
     discriminator_weight: 0.1
     perceptual_loss: "lpips-convnext_s-1.0-0.1"
     perceptual_weight: 1.1
-    # Enable distillation
+    
+    # Semantic Distillation loss (for feature alignment with frozen encoder)
+    # In dual-stream mode, semantic_feat is used for distillation instead of vit_embeds
     distill_loss: /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B
     distill_weight: 1.0
-
+    
+    # Pixel Distillation loss (for pixel stream alignment with frozen DC-AE encoder)
+    # pixel_latent (32-dim) is compared with DC-AE encoder output
     pixel_distill_weight: 1.0
+    
+    # VF Loss (Visual Feature Loss) for pixel stream structure preservation
+    # Reference: SVG (https://github.com/svg-project/SVG)
+    # Preserves pairwise similarity structure between patches
+    # Note: VF loss values are typically small (~0.01-0.1), so high weight is needed
+    vf_loss_weight: 100.0        # Overall VF loss weight (SVG default=100)
+    vf_distmat_weight: 1.0       # Weight for distance matrix loss
+    vf_cos_weight: 1.0           # Weight for cosine similarity loss
+    vf_distmat_margin: 0.0       # Margin for distance matrix loss
+    vf_cos_margin: 0.0           # Margin for cosine similarity loss
+    
+    # Adaptive weight config (reference: SVG)
+    # Dynamically adjust loss weights based on gradient norms
+    # Weight = base_weight * ||grad(recon_loss)|| / ||grad(aux_loss)||
+    use_adaptive_weight: False    # Disabled - use fixed weights instead
+    adaptive_vf_weight: False     # Use adaptive weight for VF loss
+    adaptive_distill_weight: False # Use adaptive weight for semantic distillation loss
+    adaptive_pixel_distill_weight: False  # Use adaptive weight for pixel distillation loss
+    adaptive_weight_max: 1e4      # Maximum adaptive weight value (not used when disabled)
+    
+    # Pixel reconstruction loss
     reconstruction_loss: "l2"
     reconstruction_weight: 1.0
+    
+    # Other loss settings
     lecam_regularization_weight: 0.001
     kl_weight: 0.0
     logvar_init: 0.0

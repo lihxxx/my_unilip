@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "1b_dual_stream_vf100_224E256_semae316_IN_GAN30k_lr2ex01_100k"
-    output_dir: "checkpoints/1b_dual_stream_vf100_224E256_semae316_IN_GAN30k_lr2ex01_100k"
+    name: "1b_dual_stream_vf1_m001_224E256_semae316_IN_GAN30k_lr2ex05E1e5_100k"
+    output_dir: "checkpoints/1b_dual_stream_vf1_m001_224E256_semae316_IN_GAN30k_lr2ex05E1e5_100k"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 10_000
     eval_every: 10_000
@@ -66,11 +66,11 @@ losses:
     # Reference: SVG (https://github.com/svg-project/SVG)
     # Preserves pairwise similarity structure between patches
     # Note: VF loss values are typically small (~0.01-0.1), so high weight is needed
-    vf_loss_weight: 100.0        # Overall VF loss weight (SVG default=100)
+    vf_loss_weight: 1.0        # Overall VF loss weight (SVG default=100)
     vf_distmat_weight: 1.0       # Weight for distance matrix loss
     vf_cos_weight: 1.0           # Weight for cosine similarity loss
-    vf_distmat_margin: 0.0       # Margin for distance matrix loss
-    vf_cos_margin: 0.0           # Margin for cosine similarity loss
+    vf_distmat_margin: 0.01       # Margin for distance matrix loss
+    vf_cos_margin: 0.01           # Margin for cosine similarity loss
     
     # Adaptive weight config (reference: SVG)
     # Dynamically adjust loss weights based on gradient norms
@@ -117,7 +117,7 @@ optimizer:
         beta2: 0.999
         weight_decay: 1e-4
         use_encoder_lr_scale: True
-        encoder_lr_scale: 0.1
+        encoder_lr_scale: 0.5
 
 
 lr_scheduler:
@@ -125,7 +125,7 @@ lr_scheduler:
     params:
         learning_rate: ${optimizer.params.learning_rate}
         warmup_steps: 3_000
-        end_lr: 1e-4
+        end_lr: 1e-5
 
 
 training:
