@@ -67,7 +67,18 @@ class UniLIP_InternVL_MetaModel:
             }
             vae_config = OmegaConf.create(vae_config)
             llm_hidden_size = self.multi_modal_projector[-1].weight.shape[-1]
-            self.vae_decoder = DCAE_Decoder(vae_config, llm_hidden_size)
+            
+            # Get dual stream config from config if available
+            use_dual_stream = getattr(config, 'use_dual_stream', False)
+            dual_stream_config = None
+            if use_dual_stream:
+                dual_stream_config = {
+                    'num_layers': getattr(config, 'dual_stream_num_layers', 3),
+                    'num_heads': getattr(config, 'dual_stream_num_heads', 16),
+                    'mlp_ratio': getattr(config, 'dual_stream_mlp_ratio', 4.0),
+                    'dropout': getattr(config, 'dual_stream_dropout', 0.0),
+                }
+            self.vae_decoder = DCAE_Decoder(vae_config, llm_hidden_size, use_dual_stream, dual_stream_config)
 
             path = config.mllm_hf_path
             internvl_model = AutoModel.from_pretrained(
@@ -141,16 +152,32 @@ class UniLIP_InternVL_MetaModel:
             }
             vae_config = OmegaConf.create(vae_config)
             llm_hidden_size = self.multi_modal_projector[-1].weight.shape[-1]
-            self.vae_decoder = DCAE_Decoder(vae_config, llm_hidden_size)
-            for name in list(unilip_ckpt.keys()):
+            
+            # Get dual stream config from model_args if available
+            use_dual_stream = getattr(model_args, 'use_dual_stream', False)
+            dual_stream_config = None
+            if use_dual_stream:
+                dual_stream_config = {
+                    'num_layers': getattr(model_args, 'dual_stream_num_layers', 3),
+                    'num_heads': getattr(model_args, 'dual_stream_num_heads', 16),
+                    'mlp_ratio': getattr(model_args, 'dual_stream_mlp_ratio', 4.0),
+                    'dropout': getattr(model_args, 'dual_stream_dropout', 0.0),
+                }
+            self.vae_decoder = DCAE_Decoder(vae_config, llm_hidden_size, use_dual_stream, dual_stream_config)
+            
+            # Filter unilip checkpoint keys for vae decoder
+            decoder_ckpt = {}
+            for name, value in unilip_ckpt.items():
                 if 'regressor' in name:
-                    del unilip_ckpt[name]
-                else:
-                    if 'decoder' in name or 'down' in name:
-                        continue
-                    else:
-                        del unilip_ckpt[name]
-            msg = self.vae_decoder.load_state_dict(unilip_ckpt)
+                    continue
+                # Include decoder and down-related keys
+                if 'decoder' in name or 'down' in name:
+                    decoder_ckpt[name] = value
+                # For dual stream, also include semantic and fusion related keys
+                if use_dual_stream:
+                    if 'semantic' in name or 'fusion' in name:
+                        decoder_ckpt[name] = value
+            msg = self.vae_decoder.load_state_dict(decoder_ckpt, strict=False)
             for p in self.vae_decoder.parameters():
                 p.requires_grad = False
             print("load unilip decoder", msg)

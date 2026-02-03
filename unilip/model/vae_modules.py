@@ -529,54 +529,250 @@ class Encoder(nn.Module):
         return h
 
 class DCAE_Decoder(nn.Module):
-    # def __init__(self, *, ch, out_ch, ch_mult=(1,2,4,8), num_res_blocks,
-    #              attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,
-    #              resolution, z_channels, give_pre_end=False, tanh_out=False, use_linear_attn=False,
-    #              attn_type="vanilla", **ignorekwargs):
-    def __init__(self, config, llm_hidden_size):
+    """
+    DCAE Decoder with optional Dual Stream support.
+    
+    Dual Stream Architecture (when use_dual_stream=True):
+    - Stream 1 (Semantic): vit_embeds -> TransformerEncoder -> semantic_feat 
+                          -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
+    - Stream 2 (Pixel): vit_embeds -> down_blocks -> down_mlp -> 32-dim
+    - Fusion: concat(32, 32) -> 64-dim -> fusion_layer -> 32-dim -> decoder
+    
+    Original Architecture (when use_dual_stream=False):
+    - vit_embeds -> down_blocks -> down_mlp -> 32-dim -> decoder
+    
+    Args:
+        config: Config containing model.dc_ae_path and optional dual_stream settings
+        llm_hidden_size: Hidden size from LLM (e.g., 2048 for InternVL3-1B)
+        use_dual_stream: Whether to use dual stream architecture (default: False)
+        dual_stream_config: Dict with dual stream configuration:
+            - num_layers: Number of transformer encoder layers (default: 3)
+            - num_heads: Number of attention heads (default: 16)
+            - mlp_ratio: MLP expansion ratio (default: 4.0)
+            - dropout: Dropout rate (default: 0.0)
+    """
+    
+    def __init__(self, config, llm_hidden_size, use_dual_stream=False, dual_stream_config=None):
         super().__init__()
+        
+        self.use_dual_stream = use_dual_stream
+        self.llm_hidden_size = llm_hidden_size
+        
+        # Load DC-AE decoder
         dc_ae = AutoencoderDC.from_pretrained(config.model.dc_ae_path, torch_dtype=torch.float32)
         self.decoder = dc_ae.decoder
-        # map clip feature to vae dim
-        down_blocks = []
-        for i in range(3):
-            down_blocks.append(ResBlock(
-                llm_hidden_size,
-            ))
-        self.down_blocks = nn.ModuleList(down_blocks)
-        self.down_mlp = nn.Sequential(
-            nn.LayerNorm(llm_hidden_size),
-            nn.Linear(llm_hidden_size, 32),
-            nn.GELU(),
-            nn.Linear(32, 32),
-        )
+        
+        # Default dual stream config
+        if dual_stream_config is None:
+            dual_stream_config = {}
+        self.dual_stream_num_layers = dual_stream_config.get('num_layers', 3)
+        self.dual_stream_num_heads = dual_stream_config.get('num_heads', 16)
+        self.dual_stream_mlp_ratio = dual_stream_config.get('mlp_ratio', 4.0)
+        self.dual_stream_dropout = dual_stream_config.get('dropout', 0.0)
+        
+        if self.use_dual_stream:
+            # ============ Dual Stream Architecture ============
+            # Stream 1 (Semantic): vit_embeds -> TransformerEncoder -> semantic_feat
+            #                      -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
+            # Stream 2 (Pixel): vit_embeds -> down_blocks -> down_mlp -> 32-dim
+            # Fusion: concat(32, 32) -> 64-dim -> fusion_layer -> 32-dim
+            
+            # Semantic stream: TransformerEncoder for semantic feature extraction
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=llm_hidden_size,
+                nhead=self.dual_stream_num_heads,
+                dim_feedforward=int(llm_hidden_size * self.dual_stream_mlp_ratio),
+                dropout=self.dual_stream_dropout,
+                activation='gelu',
+                batch_first=True,
+                norm_first=True
+            )
+            self.semantic_transformer = nn.TransformerEncoder(
+                encoder_layer,
+                num_layers=self.dual_stream_num_layers
+            )
+            
+            # Semantic down blocks: llm_hidden_size -> 32
+            semantic_down_blocks = []
+            for i in range(3):
+                semantic_down_blocks.append(ResBlock(llm_hidden_size))
+            self.semantic_down_blocks = nn.ModuleList(semantic_down_blocks)
+            self.semantic_down_mlp = nn.Sequential(
+                nn.LayerNorm(llm_hidden_size),
+                nn.Linear(llm_hidden_size, 32),
+                nn.GELU(),
+                nn.Linear(32, 32),
+            )
+            
+            # Pixel stream: down_blocks -> down_mlp (llm_hidden_size -> 32)
+            down_blocks = []
+            for i in range(3):
+                down_blocks.append(ResBlock(llm_hidden_size))
+            self.down_blocks = nn.ModuleList(down_blocks)
+            self.down_mlp = nn.Sequential(
+                nn.LayerNorm(llm_hidden_size),
+                nn.Linear(llm_hidden_size, 32),
+                nn.GELU(),
+                nn.Linear(32, 32),
+            )
+            
+            # Fusion layer: 64 -> 32
+            self.fusion_layer = nn.Sequential(
+                nn.LayerNorm(64),
+                nn.Linear(64, 64),
+                nn.GELU(),
+                nn.Linear(64, 32),
+            )
+            
+            print(f"DCAE_Decoder: Dual Stream enabled with num_layers={self.dual_stream_num_layers}, "
+                  f"num_heads={self.dual_stream_num_heads}, mlp_ratio={self.dual_stream_mlp_ratio}")
+        else:
+            # ============ Original Single Stream Architecture ============
+            # vit_embeds -> down_blocks -> down_mlp -> 32-dim
+            down_blocks = []
+            for i in range(3):
+                down_blocks.append(ResBlock(llm_hidden_size))
+            self.down_blocks = nn.ModuleList(down_blocks)
+            self.down_mlp = nn.Sequential(
+                nn.LayerNorm(llm_hidden_size),
+                nn.Linear(llm_hidden_size, 32),
+                nn.GELU(),
+                nn.Linear(32, 32),
+            )
+            print("DCAE_Decoder: Using original single stream architecture")
 
     def forward(self, vit_embeds):
-        for block in self.down_blocks:
-            vit_embeds = block(vit_embeds)
-        vit_embeds = self.down_mlp(vit_embeds)
-
-        vit_embeds = vit_embeds.permute(0,2,1).contiguous()
-
-        b, c, hw = vit_embeds.shape
-        z = vit_embeds.view(b, c, int(math.sqrt(hw)), int(math.sqrt(hw)))
+        """
+        Forward pass through the decoder.
+        
+        Args:
+            vit_embeds: Input features of shape (B, N, llm_hidden_size)
+            
+        Returns:
+            h: Reconstructed image of shape (B, 3, H, W)
+        """
+        if self.use_dual_stream:
+            # Dual stream forward
+            z = self._dual_stream_encode(vit_embeds)
+        else:
+            # Original single stream forward
+            z = self._single_stream_encode(vit_embeds)
+        
         h = self.decoder(z)
         return h
     
-    def clip_down(self, vit_embeds):
+    def _single_stream_encode(self, vit_embeds):
+        """Single stream encoding: vit_embeds -> down_blocks -> down_mlp -> latent"""
         for block in self.down_blocks:
             vit_embeds = block(vit_embeds)
         vit_embeds = self.down_mlp(vit_embeds)
-
-        vit_embeds = vit_embeds.permute(0,2,1).contiguous()
-
+        
+        vit_embeds = vit_embeds.permute(0, 2, 1).contiguous()
+        
         b, c, hw = vit_embeds.shape
         z = vit_embeds.view(b, c, int(math.sqrt(hw)), int(math.sqrt(hw)))
         return z
     
+    def _dual_stream_encode(self, vit_embeds):
+        """
+        Dual stream encoding:
+        - Semantic: vit_embeds -> semantic_transformer -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
+        - Pixel: vit_embeds -> down_blocks -> down_mlp -> 32-dim
+        - Fusion: concat(semantic, pixel) -> fusion_layer -> 32-dim
+        """
+        # Semantic stream: vit_embeds -> TransformerEncoder -> semantic_feat
+        semantic_feat = self.semantic_transformer(vit_embeds)  # (B, N, llm_hidden_size)
+        
+        # Semantic stream: semantic_feat -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
+        semantic_latent = semantic_feat
+        for block in self.semantic_down_blocks:
+            semantic_latent = block(semantic_latent)
+        semantic_latent = self.semantic_down_mlp(semantic_latent)  # (B, N, 32)
+        
+        # Pixel stream: vit_embeds -> down_blocks -> down_mlp -> 32-dim
+        pixel_latent = vit_embeds
+        for block in self.down_blocks:
+            pixel_latent = block(pixel_latent)
+        pixel_latent = self.down_mlp(pixel_latent)  # (B, N, 32)
+        
+        # Fusion: concat(semantic_latent, pixel_latent) -> fusion_layer -> 32-dim
+        fused_latent = torch.cat([semantic_latent, pixel_latent], dim=-1)  # (B, N, 64)
+        latent_for_decoder = self.fusion_layer(fused_latent)  # (B, N, 32)
+        
+        # Reshape to spatial format
+        latent_for_decoder = latent_for_decoder.permute(0, 2, 1).contiguous()
+        
+        b, c, hw = latent_for_decoder.shape
+        z = latent_for_decoder.view(b, c, int(math.sqrt(hw)), int(math.sqrt(hw)))
+        return z
+    
+    def clip_down(self, vit_embeds):
+        """
+        Encode vit_embeds to latent space without decoding.
+        
+        Args:
+            vit_embeds: Input features of shape (B, N, llm_hidden_size)
+            
+        Returns:
+            z: Latent representation of shape (B, 32, H, W)
+        """
+        if self.use_dual_stream:
+            z = self._dual_stream_encode(vit_embeds)
+        else:
+            z = self._single_stream_encode(vit_embeds)
+        return z
+    
     def vae_decode(self, z):
+        """
+        Decode latent representation to image.
+        
+        Args:
+            z: Latent representation of shape (B, 32, H, W)
+            
+        Returns:
+            h: Reconstructed image of shape (B, 3, H, W)
+        """
         h = self.decoder(z)
         return h
+    
+    def get_semantic_features(self, vit_embeds):
+        """
+        Get semantic features from the semantic stream (only available when use_dual_stream=True).
+        
+        This can be used for distillation loss computation.
+        
+        Args:
+            vit_embeds: Input features of shape (B, N, llm_hidden_size)
+            
+        Returns:
+            semantic_feat: Semantic features of shape (B, N, llm_hidden_size)
+        """
+        if not self.use_dual_stream:
+            raise ValueError("get_semantic_features is only available when use_dual_stream=True")
+        
+        semantic_feat = self.semantic_transformer(vit_embeds)
+        return semantic_feat
+    
+    def get_pixel_latent(self, vit_embeds):
+        """
+        Get pixel latent from the pixel stream (only available when use_dual_stream=True).
+        
+        This can be used for pixel distillation loss computation.
+        
+        Args:
+            vit_embeds: Input features of shape (B, N, llm_hidden_size)
+            
+        Returns:
+            pixel_latent: Pixel latent of shape (B, N, 32)
+        """
+        if not self.use_dual_stream:
+            raise ValueError("get_pixel_latent is only available when use_dual_stream=True")
+        
+        pixel_latent = vit_embeds
+        for block in self.down_blocks:
+            pixel_latent = block(pixel_latent)
+        pixel_latent = self.down_mlp(pixel_latent)
+        return pixel_latent
 
 class Decoder(nn.Module):
     # def __init__(self, *, ch, out_ch, ch_mult=(1,2,4,8), num_res_blocks,

@@ -82,4 +82,9 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --enable_repa ${ENABLE_REPA} \
     --repa_loss_weight ${REPA_LOSS_WEIGHT} \
     --repa_encoder_depth ${REPA_ENCODER_DEPTH} \
-    --unfreeze_vision_encoder ${UNFREEZE_VISION_ENCODER}
+    --unfreeze_vision_encoder ${UNFREEZE_VISION_ENCODER} \
+    --use_dual_stream True \
+    --dual_stream_num_layers 3 \
+    --dual_stream_num_heads 16 \
+    --dual_stream_mlp_ratio 4.0 \
+    --dual_stream_dropout 0.0

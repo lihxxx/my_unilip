@@ -112,6 +112,13 @@ class ModelArguments:
     repa_encoder_depth: int = field(default=6, metadata={"help": "在encoder第几层提取REPA特征"})
     repa_projector_dim: int = field(default=2048, metadata={"help": "REPA投影头中间维度"})
     unfreeze_vision_encoder: bool = field(default=False, metadata={"help": "是否解冻vision encoder（类似REPA-E）"})
+    
+    # Dual Stream相关参数
+    use_dual_stream: bool = field(default=False, metadata={"help": "是否使用dual stream架构"})
+    dual_stream_num_layers: int = field(default=3, metadata={"help": "Semantic stream transformer层数"})
+    dual_stream_num_heads: int = field(default=16, metadata={"help": "Semantic stream attention头数"})
+    dual_stream_mlp_ratio: float = field(default=4.0, metadata={"help": "Semantic stream MLP扩展比例"})
+    dual_stream_dropout: float = field(default=0.0, metadata={"help": "Semantic stream dropout率"})
 
 
 @dataclass
