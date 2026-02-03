@@ -276,8 +276,9 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
             path,
             torch_dtype=torch.float32,
             low_cpu_mem_usage=True,
-            use_flash_attn=False,
-            trust_remote_code=True
+            use_flash_attn=True,
+            trust_remote_code=True,
+            attn_implementation="flash_attention_2",
         )
         self.encoder = model.vision_model
         vit_dim = model.vision_model.embeddings.patch_embedding.weight.shape[0]

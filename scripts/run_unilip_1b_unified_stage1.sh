@@ -9,7 +9,7 @@ export BASE_DIR="../"
 export OUTPUT_FOLDER="${BASE_DIR}/work_dirs/1b_unified_stage1"
 
 # 数据路径：多个目录用逗号分隔
-export GEN_IMG_FOLDER="${BASE_DIR}/data/BLIP3o-Pretrain/BLIP3o-Pretrain-Long-Caption,${BASE_DIR}/data/BLIP3o-Pretrain/BLIP3o-Pretrain-Short-Caption,${BASE_DIR}/data/BLIP3o-Pretrain/BLIP3o-Pretrain-JourneyDB"
+export GEN_IMG_FOLDER="${BASE_DIR}/data/BLIP3o-Pretrain-Long-Caption,${BASE_DIR}/data/BLIP3o-Pretrain-Short-Caption,${BASE_DIR}/data/BLIP3o-Pretrain-JourneyDB"
 
 # ============== WandB配置（可选）==============
 # unset WANDB_DISABLED

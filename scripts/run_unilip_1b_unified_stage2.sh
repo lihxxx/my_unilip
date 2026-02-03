@@ -8,7 +8,7 @@
 # 数据路径支持多个目录，用逗号分隔
 export BASE_DIR="../"
 export OUTPUT_FOLDER="${BASE_DIR}/work_dirs/1b_unified_stage2"
-export GEN_IMG_FOLDER="${BASE_DIR}/data/BLIP3o-Pretrain"
+export GEN_IMG_FOLDER="${BASE_DIR}/data/BLIP3o-Pretrain-Long-Caption,${BASE_DIR}/data/BLIP3o-Pretrain-Short-Caption,${BASE_DIR}/data/BLIP3o-Pretrain-JourneyDB"
 export EDIT_IMG_FOLDER="${BASE_DIR}/data/GPT-Edit"
 
 # Stage1的checkpoint路径（请修改为实际路径）
