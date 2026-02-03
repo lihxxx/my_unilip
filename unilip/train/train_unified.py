@@ -115,10 +115,13 @@ class ModelArguments:
     
     # Dual Stream相关参数
     use_dual_stream: bool = field(default=False, metadata={"help": "是否使用dual stream架构"})
-    dual_stream_num_layers: int = field(default=3, metadata={"help": "Semantic stream transformer层数"})
-    dual_stream_num_heads: int = field(default=16, metadata={"help": "Semantic stream attention头数"})
-    dual_stream_mlp_ratio: float = field(default=4.0, metadata={"help": "Semantic stream MLP扩展比例"})
-    dual_stream_dropout: float = field(default=0.0, metadata={"help": "Semantic stream dropout率"})
+    dual_stream_num_layers: int = field(default=3, metadata={"help": "Semantic/Pixel stream transformer层数"})
+    dual_stream_num_heads: int = field(default=16, metadata={"help": "Semantic/Pixel stream attention头数"})
+    dual_stream_mlp_ratio: float = field(default=4.0, metadata={"help": "Semantic/Pixel stream MLP扩展比例"})
+    dual_stream_dropout: float = field(default=0.0, metadata={"help": "Semantic/Pixel stream dropout率"})
+    # Cross-stream交互参数
+    use_cross_stream: bool = field(default=False, metadata={"help": "是否使用跨流注意力交互"})
+    cross_stream_num_heads: int = field(default=16, metadata={"help": "跨流注意力头数"})
 
 
 @dataclass

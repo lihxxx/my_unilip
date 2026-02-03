@@ -77,6 +77,8 @@ class UniLIP_InternVL_MetaModel:
                     'num_heads': getattr(config, 'dual_stream_num_heads', 16),
                     'mlp_ratio': getattr(config, 'dual_stream_mlp_ratio', 4.0),
                     'dropout': getattr(config, 'dual_stream_dropout', 0.0),
+                    'use_cross_stream': getattr(config, 'use_cross_stream', False),
+                    'cross_stream_num_heads': getattr(config, 'cross_stream_num_heads', 16),
                 }
             self.vae_decoder = DCAE_Decoder(vae_config, llm_hidden_size, use_dual_stream, dual_stream_config)
 
@@ -162,6 +164,8 @@ class UniLIP_InternVL_MetaModel:
                     'num_heads': getattr(model_args, 'dual_stream_num_heads', 16),
                     'mlp_ratio': getattr(model_args, 'dual_stream_mlp_ratio', 4.0),
                     'dropout': getattr(model_args, 'dual_stream_dropout', 0.0),
+                    'use_cross_stream': getattr(model_args, 'use_cross_stream', False),
+                    'cross_stream_num_heads': getattr(model_args, 'cross_stream_num_heads', 16),
                 }
             self.vae_decoder = DCAE_Decoder(vae_config, llm_hidden_size, use_dual_stream, dual_stream_config)
             
@@ -173,9 +177,9 @@ class UniLIP_InternVL_MetaModel:
                 # Include decoder and down-related keys
                 if 'decoder' in name or 'down' in name:
                     decoder_ckpt[name] = value
-                # For dual stream, also include semantic and fusion related keys
+                # For dual stream, also include semantic, pixel, fusion, and cross_stream related keys
                 if use_dual_stream:
-                    if 'semantic' in name or 'fusion' in name:
+                    if any(key in name for key in ['semantic', 'pixel', 'fusion', 'cross_stream']):
                         decoder_ckpt[name] = value
             msg = self.vae_decoder.load_state_dict(decoder_ckpt, strict=False)
             for p in self.vae_decoder.parameters():

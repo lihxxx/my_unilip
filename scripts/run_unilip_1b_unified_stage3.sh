@@ -87,4 +87,6 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --dual_stream_num_layers 3 \
     --dual_stream_num_heads 16 \
     --dual_stream_mlp_ratio 4.0 \
-    --dual_stream_dropout 0.0
+    --dual_stream_dropout 0.0 \
+    --use_cross_stream True \
+    --cross_stream_num_heads 16

@@ -174,6 +174,87 @@ class SemanticDecoder(nn.Module):
         return x
 
 
+class CrossStreamAttention(nn.Module):
+    """Cross-Stream Attention for Dual Stream Architecture.
+    
+    Enables information exchange between semantic and pixel streams.
+    - Semantic stream can attend to pixel stream features
+    - Pixel stream can attend to semantic stream features
+    
+    This helps:
+    1. Semantic stream incorporates low-level details when needed
+    2. Pixel stream incorporates high-level semantics for better reconstruction
+    """
+    
+    def __init__(self, hidden_size, num_heads=8, dropout=0.0):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        
+        # Cross attention: semantic attends to pixel
+        self.norm_sem = nn.LayerNorm(hidden_size, eps=1e-6)
+        self.norm_pix_for_sem = nn.LayerNorm(hidden_size, eps=1e-6)
+        self.cross_attn_sem = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+        
+        # Cross attention: pixel attends to semantic
+        self.norm_pix = nn.LayerNorm(hidden_size, eps=1e-6)
+        self.norm_sem_for_pix = nn.LayerNorm(hidden_size, eps=1e-6)
+        self.cross_attn_pix = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+        
+        # FFN for semantic stream after cross attention
+        self.norm_ffn_sem = nn.LayerNorm(hidden_size, eps=1e-6)
+        self.ffn_sem = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size * 4),
+            nn.GELU(),
+            nn.Linear(hidden_size * 4, hidden_size),
+        )
+        
+        # FFN for pixel stream after cross attention
+        self.norm_ffn_pix = nn.LayerNorm(hidden_size, eps=1e-6)
+        self.ffn_pix = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size * 4),
+            nn.GELU(),
+            nn.Linear(hidden_size * 4, hidden_size),
+        )
+        
+    def forward(self, semantic_feat, pixel_feat):
+        """
+        Args:
+            semantic_feat: (B, N, D) semantic stream features
+            pixel_feat: (B, N, D) pixel stream features
+        Returns:
+            semantic_enhanced: (B, N, D) semantic features enhanced with pixel info
+            pixel_enhanced: (B, N, D) pixel features enhanced with semantic info
+        """
+        # Cross attention: semantic attends to pixel (Q=semantic, K,V=pixel)
+        sem_norm = self.norm_sem(semantic_feat)
+        pix_for_sem = self.norm_pix_for_sem(pixel_feat)
+        sem_cross, _ = self.cross_attn_sem(sem_norm, pix_for_sem, pix_for_sem)
+        semantic_feat = semantic_feat + sem_cross
+        
+        # Cross attention: pixel attends to semantic (Q=pixel, K,V=semantic)
+        pix_norm = self.norm_pix(pixel_feat)
+        sem_for_pix = self.norm_sem_for_pix(semantic_feat)  # Use updated semantic
+        pix_cross, _ = self.cross_attn_pix(pix_norm, sem_for_pix, sem_for_pix)
+        pixel_feat = pixel_feat + pix_cross
+        
+        # FFN for both streams
+        semantic_enhanced = semantic_feat + self.ffn_sem(self.norm_ffn_sem(semantic_feat))
+        pixel_enhanced = pixel_feat + self.ffn_pix(self.norm_ffn_pix(pixel_feat))
+        
+        return semantic_enhanced, pixel_enhanced
+
+
 def pixel_shuffle(x, scale_factor=0.5):
     """Pixel shuffle operation for feature map reorganization."""
     n, w, h, c = x.size()
@@ -311,16 +392,21 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         self.dual_stream_num_heads = dual_stream_config.get("num_heads", 16)
         self.dual_stream_mlp_ratio = dual_stream_config.get("mlp_ratio", 4.0)
         self.dual_stream_dropout = dual_stream_config.get("dropout", 0.0)
+        # Cross-stream interaction config
+        self.use_cross_stream = dual_stream_config.get("use_cross_stream", False)
+        self.cross_stream_num_heads = dual_stream_config.get("cross_stream_num_heads", 16)
         
         if self.use_dual_stream:
             # ============ Dual Stream Architecture ============
             # Stream 1 (Semantic): vit_embeds -> TransformerEncoder -> semantic_feat (for distill_loss)
             #                      -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
-            # Stream 2 (Pixel): vit_embeds -> down_blocks -> down_mlp -> 32-dim
+            # Stream 2 (Pixel): vit_embeds -> pixel_transformer -> pixel_feat
+            #                   -> down_blocks -> down_mlp -> 32-dim
+            # Cross-Stream (optional): CrossStreamAttention for information exchange
             # Fusion: concat(32, 32) -> 64-dim -> fusion_layer -> 32-dim
             
             # Semantic stream: TransformerEncoder for semantic feature extraction
-            encoder_layer = nn.TransformerEncoderLayer(
+            semantic_encoder_layer = nn.TransformerEncoderLayer(
                 d_model=llm_hidden_size,
                 nhead=self.dual_stream_num_heads,
                 dim_feedforward=int(llm_hidden_size * self.dual_stream_mlp_ratio),
@@ -330,9 +416,33 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
                 norm_first=True
             )
             self.semantic_transformer = nn.TransformerEncoder(
-                encoder_layer,
+                semantic_encoder_layer,
                 num_layers=self.dual_stream_num_layers
             )
+            
+            # Pixel stream: TransformerEncoder for pixel feature extraction
+            pixel_encoder_layer = nn.TransformerEncoderLayer(
+                d_model=llm_hidden_size,
+                nhead=self.dual_stream_num_heads,
+                dim_feedforward=int(llm_hidden_size * self.dual_stream_mlp_ratio),
+                dropout=self.dual_stream_dropout,
+                activation='gelu',
+                batch_first=True,
+                norm_first=True
+            )
+            self.pixel_transformer = nn.TransformerEncoder(
+                pixel_encoder_layer,
+                num_layers=self.dual_stream_num_layers
+            )
+            
+            # Cross-stream attention (optional)
+            if self.use_cross_stream:
+                self.cross_stream_attention = CrossStreamAttention(
+                    hidden_size=llm_hidden_size,
+                    num_heads=self.cross_stream_num_heads,
+                    dropout=self.dual_stream_dropout
+                )
+                print(f"  Cross-Stream Attention enabled with num_heads={self.cross_stream_num_heads}")
             
             # Semantic down blocks: llm_hidden_size -> 32
             semantic_down_blocks = []
@@ -346,12 +456,12 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
                 nn.Linear(32, 32),
             )
             
-            # Pixel stream: down_blocks -> down_mlp (llm_hidden_size -> 32)
-            down_blocks = []
+            # Pixel stream: pixel_down_blocks -> pixel_down_mlp (llm_hidden_size -> 32)
+            pixel_down_blocks = []
             for i in range(3):
-                down_blocks.append(ResBlock(llm_hidden_size))
-            self.down_blocks = nn.ModuleList(down_blocks)
-            self.down_mlp = nn.Sequential(
+                pixel_down_blocks.append(ResBlock(llm_hidden_size))
+            self.pixel_down_blocks = nn.ModuleList(pixel_down_blocks)
+            self.pixel_down_mlp = nn.Sequential(
                 nn.LayerNorm(llm_hidden_size),
                 nn.Linear(llm_hidden_size, 32),
                 nn.GELU(),
@@ -367,7 +477,7 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
             )
             
             print(f"Dual Stream enabled with num_layers={self.dual_stream_num_layers}, "
-                  f"num_heads={self.dual_stream_num_heads}")
+                  f"num_heads={self.dual_stream_num_heads}, use_cross_stream={self.use_cross_stream}")
                   
         elif self.use_semantic_ae:
             # Build Semantic Encoder and Decoder (PS-VAE style)
@@ -646,16 +756,28 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         
         if self.use_dual_stream:
             # ============ Dual Stream Architecture ============
-            # Stream 1 (Semantic): vit_embeds -> TransformerEncoder -> semantic_feat (for distill_loss)
-            #                      -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
-            # Stream 2 (Pixel): vit_embeds -> down_blocks -> down_mlp -> 32-dim
+            # Stream 1 (Semantic): vit_embeds -> semantic_transformer -> semantic_feat
+            # Stream 2 (Pixel): vit_embeds -> pixel_transformer -> pixel_feat
+            # Cross-Stream (optional): CrossStreamAttention for information exchange
+            # Then: semantic_feat -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
+            #       pixel_feat -> down_blocks -> down_mlp -> 32-dim
             # Fusion: concat(32, 32) -> 64-dim -> fusion_layer -> 32-dim
             
             # Semantic stream: vit_embeds -> TransformerEncoder -> semantic_feat
             semantic_feat = self.semantic_transformer(vit_embeds)  # (B, N, llm_hidden_size)
             
+            # Pixel stream: vit_embeds -> TransformerEncoder -> pixel_feat
+            pixel_feat = self.pixel_transformer(vit_embeds)  # (B, N, llm_hidden_size)
+            
+            # Cross-stream attention (optional): information exchange between streams
+            if self.use_cross_stream:
+                semantic_feat, pixel_feat = self.cross_stream_attention(semantic_feat, pixel_feat)
+            
             # Use semantic_feat for distillation loss (replaces vit_embeds)
             distill_output = semantic_feat.clone()
+            
+            # Store pixel_feat (before down) for pixel distillation if needed
+            result_dict['pixel_feat'] = pixel_feat.clone()
             
             # Semantic stream: semantic_feat -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
             semantic_latent = semantic_feat
@@ -663,11 +785,11 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
                 semantic_latent = block(semantic_latent)
             semantic_latent = self.semantic_down_mlp(semantic_latent)  # (B, N, 32)
             
-            # Pixel stream: vit_embeds -> down_blocks -> down_mlp -> 32-dim
-            pixel_latent = vit_embeds
-            for block in self.down_blocks:
+            # Pixel stream: pixel_feat -> pixel_down_blocks -> pixel_down_mlp -> 32-dim
+            pixel_latent = pixel_feat
+            for block in self.pixel_down_blocks:
                 pixel_latent = block(pixel_latent)
-            pixel_latent = self.down_mlp(pixel_latent)  # (B, N, 32)
+            pixel_latent = self.pixel_down_mlp(pixel_latent)  # (B, N, 32)
             
             # Store pixel_latent for pixel distillation loss
             result_dict['pixel_latent'] = pixel_latent.clone()
