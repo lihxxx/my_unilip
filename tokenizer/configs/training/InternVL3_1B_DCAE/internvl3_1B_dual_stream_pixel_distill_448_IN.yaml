@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "1b_dual_stream_pixel_distill_448E256_semae616_IN_GAN30k_lr2ex01"
-    output_dir: "checkpoints/1b_dual_stream_pixel_distill_448E256_semae616_IN_GAN30k_lr2ex01"
+    name: "1b_dual_stream_pixel_distill_448E256_semae316_IN_GAN30k_lr3ex05E1e5W10k_100k"
+    output_dir: "checkpoints/1b_dual_stream_pixel_distill_448E256_semae316_IN_GAN30k_lr3ex05E1e5W10k_100k"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 10_000
     eval_every: 10_000
@@ -24,12 +24,12 @@ model:
     stage1_ckpt: ""
     freeze_encoder: False
     output_distill_feat: True
-    disable_drop_path: True
-    use_gradient_checkpoint: True
+    disable_drop_path: False
+    use_gradient_checkpoint: False
     use_dual_stream: True
     use_semantic_ae: False
     dual_stream:
-        num_layers: 6       # Number of transformer encoder layers for semantic stream
+        num_layers: 3       # Number of transformer encoder layers for semantic stream
         num_heads: 16       # Number of attention heads (2048 / 16 = 128 head_dim)
         mlp_ratio: 4.0      # MLP expansion ratio
         dropout: 0.0        # Dropout rate
@@ -78,24 +78,24 @@ dataset:
 optimizer:
     name: adamw 
     params:
-        learning_rate: 2e-4
-        discriminator_learning_rate: 2e-4
+        learning_rate: 3e-4
+        discriminator_learning_rate: 3e-4
         beta1: 0.9
         beta2: 0.999
         weight_decay: 1e-4
         use_encoder_lr_scale: True
-        encoder_lr_scale: 0.1
+        encoder_lr_scale: 0.5
 
 lr_scheduler:
     scheduler: "cosine"
     params:
         learning_rate: ${optimizer.params.learning_rate}
-        warmup_steps: 3_000
-        end_lr: 1e-4
+        warmup_steps: 10_000
+        end_lr: 1e-5
 
 training:
     gradient_accumulation_steps: 1
-    per_gpu_batch_size: 16
+    per_gpu_batch_size: 8
     mixed_precision: "bf16"
     enable_tf32: True
     enable_wandb: True
