@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "1b_dual_stream_layerwiseDis1_224E256_semae316_IN_GAN30k_lr2ex01_100k"
-    output_dir: "checkpoints/1b_dual_stream_layerwiseDis1_224E256_semae316_IN_GAN30k_lr2ex01_100k"
+    name: "Freeze_1b_dual_stream01CrossTrans_224E256_semae316_IN_GANnull_lr2ex01E1e5W10k_100k"
+    output_dir: "checkpoints/Freeze_1b_dual_stream01CrossTrans_224E256_semae316_IN_GANnull_lr2ex01E1e5W10k_100k"
     max_train_examples: 1_281_167    # ImageNet训练集大小
     save_every: 10_000
     eval_every: 10_000
@@ -22,18 +22,10 @@ model:
     dc_ae_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers"
     # Stage2 specific
     stage1_ckpt: ""
-    freeze_encoder: False
+    freeze_encoder: True
     output_distill_feat: True
-    disable_drop_path: True
+    disable_drop_path: False
     use_gradient_checkpoint: False
-    
-    # Layer-wise Adaptive Self-Distillation (UniFlow style)
-    # Reference: https://arxiv.org/pdf/2510.10575
-    # Distills features from multiple encoder layers with adaptive weights
-    # - Deeper layers get higher base weights (preserve semantic capability)
-    # - Poorly aligned layers get additional penalty weight
-    use_layerwise_distill: True    # Enable layer-wise distillation (set False for single-layer distillation)
-    layerwise_distill_layers: null  # null = use all layers, or specify list like [6, 12, 18, 23]
     
     # Dual Stream configuration with Pixel Distillation
     # Stream 1 (Semantic): vit_embeds -> TransformerEncoder -> semantic_feat (for distill_loss)
@@ -47,6 +39,8 @@ model:
         num_heads: 16       # Number of attention heads (2048 / 16 = 128 head_dim)
         mlp_ratio: 4.0      # MLP expansion ratio
         dropout: 0.0        # Dropout rate
+        use_cross_stream: True
+        cross_stream_num_heads: 16
     
     vq_model:
         quantize_mode: vae
@@ -54,7 +48,7 @@ model:
 
 losses:
     name: ReconstructionLoss_Unified
-    discriminator_start: 30_000
+    discriminator_start: 300000_000
     quantizer_weight: 1.0
     discriminator_factor: 1.0
     discriminator_weight: 0.1
@@ -64,43 +58,11 @@ losses:
     # Semantic Distillation loss (for feature alignment with frozen encoder)
     # In dual-stream mode, semantic_feat is used for distillation instead of vit_embeds
     distill_loss: /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B
-    distill_weight: 1.0
-    
-    # Layer-wise Adaptive Self-Distillation parameters (UniFlow style)
-    # Note: layerwise_distill is INDEPENDENT of distill_loss:
-    # - distill_loss: semantic_feat (after semantic_transformer) vs frozen encoder final output
-    # - layerwise_distill: ViT encoder intermediate layers vs frozen encoder layers
-    # Both can be enabled simultaneously for better semantic preservation
-    #
-    # Beta (temperature): Higher values emphasize poorly aligned layers more
-    # - beta=0: Progressive distillation (only use base weight w_l^base = l/L)
-    # - beta=2: Default UniFlow setting, good balance
-    # - beta>3: Over-emphasizes misaligned layers, may cause instability
-    layerwise_distill_beta: 2.0
-    layerwise_distill_weight: 1.0  # Weight for layer-wise distillation loss
+    distill_weight: 0.1
     
     # Pixel Distillation loss (for pixel stream alignment with frozen DC-AE encoder)
     # pixel_latent (32-dim) is compared with DC-AE encoder output
-    pixel_distill_weight: 1.0
-    
-    # VF Loss (Visual Feature Loss) for pixel stream structure preservation
-    # Reference: SVG (https://github.com/svg-project/SVG)
-    # Preserves pairwise similarity structure between patches
-    # Note: VF loss values are typically small (~0.01-0.1), so high weight is needed
-    vf_loss_weight: 0.0          # Disabled, set to 100.0 to enable (SVG default=100)
-    vf_distmat_weight: 1.0       # Weight for distance matrix loss
-    vf_cos_weight: 1.0           # Weight for cosine similarity loss
-    vf_distmat_margin: 0.0       # Margin for distance matrix loss
-    vf_cos_margin: 0.0           # Margin for cosine similarity loss
-    
-    # Adaptive weight config (reference: SVG)
-    # Dynamically adjust loss weights based on gradient norms
-    # Weight = base_weight * ||grad(recon_loss)|| / ||grad(aux_loss)||
-    use_adaptive_weight: False    # Disabled - use fixed weights instead
-    adaptive_vf_weight: False     # Use adaptive weight for VF loss
-    adaptive_distill_weight: False # Use adaptive weight for semantic distillation loss
-    adaptive_pixel_distill_weight: False  # Use adaptive weight for pixel distillation loss
-    adaptive_weight_max: 1e4      # Maximum adaptive weight value (not used when disabled)
+    pixel_distill_weight: 0.1
     
     # Pixel reconstruction loss
     reconstruction_loss: "l2"
@@ -137,7 +99,7 @@ optimizer:
         beta1: 0.9
         beta2: 0.999
         weight_decay: 1e-4
-        use_encoder_lr_scale: True
+        use_encoder_lr_scale: False
         encoder_lr_scale: 0.1
 
 
@@ -145,8 +107,8 @@ lr_scheduler:
     scheduler: "cosine"
     params:
         learning_rate: ${optimizer.params.learning_rate}
-        warmup_steps: 3_000
-        end_lr: 1e-4
+        warmup_steps: 10_000
+        end_lr: 1e-5
 
 
 training:

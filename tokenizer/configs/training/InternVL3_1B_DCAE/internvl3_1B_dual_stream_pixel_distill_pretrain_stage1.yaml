@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "Freeze_1b_dual_stream01_224E256_semae316_pretrain_GANnull_lr2ex01E1e5W10k_400k"
-    output_dir: "checkpoints/Freeze_1b_dual_stream01_224E256_semae316_pretrain_GANnull_lr2ex01E1e5W10k_400k"
+    name: "Freeze_1b_dual_stream01CrossTrans_224E256_semae316_pretrain_GANnull_lr2ex01E1e5W10k_200k"
+    output_dir: "checkpoints/Freeze_1b_dual_stream01CrossTrans_224E256_semae316_pretrain_GANnull_lr2ex01E1e5W10k_200k"
     max_train_examples: 40_000_000
     save_every: 25_000
     eval_every: 25_000
@@ -39,7 +39,9 @@ model:
         num_heads: 16       # Number of attention heads (2048 / 16 = 128 head_dim)
         mlp_ratio: 4.0      # MLP expansion ratio
         dropout: 0.0        # Dropout rate
-    
+        use_cross_stream: True
+        cross_stream_num_heads: 16
+
     vq_model:
         quantize_mode: vae
 
