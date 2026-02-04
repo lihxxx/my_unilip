@@ -614,7 +614,7 @@ class DCAE_Decoder(nn.Module):
     - Stream 1 (Semantic): vit_embeds -> semantic_transformer -> semantic_feat 
                           -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
     - Stream 2 (Pixel): vit_embeds -> pixel_transformer -> pixel_feat
-                       -> down_blocks -> down_mlp -> 32-dim
+                       -> pixel_down_blocks -> pixel_down_mlp -> 32-dim
     - Cross-Stream (optional): CrossStreamAttention for information exchange
     - Fusion: concat(32, 32) -> 64-dim -> fusion_layer -> 32-dim -> decoder
     
@@ -715,12 +715,12 @@ class DCAE_Decoder(nn.Module):
                 nn.Linear(32, 32),
             )
             
-            # Pixel stream: down_blocks -> down_mlp (llm_hidden_size -> 32)
-            down_blocks = []
+            # Pixel stream: pixel_down_blocks -> pixel_down_mlp (llm_hidden_size -> 32)
+            pixel_down_blocks = []
             for i in range(3):
-                down_blocks.append(ResBlock(llm_hidden_size))
-            self.down_blocks = nn.ModuleList(down_blocks)
-            self.down_mlp = nn.Sequential(
+                pixel_down_blocks.append(ResBlock(llm_hidden_size))
+            self.pixel_down_blocks = nn.ModuleList(pixel_down_blocks)
+            self.pixel_down_mlp = nn.Sequential(
                 nn.LayerNorm(llm_hidden_size),
                 nn.Linear(llm_hidden_size, 32),
                 nn.GELU(),
@@ -791,7 +791,7 @@ class DCAE_Decoder(nn.Module):
         - Pixel: vit_embeds -> pixel_transformer -> pixel_feat
         - Cross-Stream (optional): CrossStreamAttention for information exchange
         - Then: semantic_feat -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
-        -       pixel_feat -> down_blocks -> down_mlp -> 32-dim
+        -       pixel_feat -> pixel_down_blocks -> pixel_down_mlp -> 32-dim
         - Fusion: concat(semantic, pixel) -> fusion_layer -> 32-dim
         """
         # Semantic stream: vit_embeds -> TransformerEncoder -> semantic_feat
@@ -810,11 +810,11 @@ class DCAE_Decoder(nn.Module):
             semantic_latent = block(semantic_latent)
         semantic_latent = self.semantic_down_mlp(semantic_latent)  # (B, N, 32)
         
-        # Pixel stream: pixel_feat -> down_blocks -> down_mlp -> 32-dim
+        # Pixel stream: pixel_feat -> pixel_down_blocks -> pixel_down_mlp -> 32-dim
         pixel_latent = pixel_feat
-        for block in self.down_blocks:
+        for block in self.pixel_down_blocks:
             pixel_latent = block(pixel_latent)
-        pixel_latent = self.down_mlp(pixel_latent)  # (B, N, 32)
+        pixel_latent = self.pixel_down_mlp(pixel_latent)  # (B, N, 32)
         
         # Fusion: concat(semantic_latent, pixel_latent) -> fusion_layer -> 32-dim
         fused_latent = torch.cat([semantic_latent, pixel_latent], dim=-1)  # (B, N, 64)
@@ -890,9 +890,9 @@ class DCAE_Decoder(nn.Module):
             raise ValueError("get_pixel_latent is only available when use_dual_stream=True")
         
         pixel_latent = vit_embeds
-        for block in self.down_blocks:
+        for block in self.pixel_down_blocks:
             pixel_latent = block(pixel_latent)
-        pixel_latent = self.down_mlp(pixel_latent)
+        pixel_latent = self.pixel_down_mlp(pixel_latent)
         return pixel_latent
 
 class Decoder(nn.Module):
