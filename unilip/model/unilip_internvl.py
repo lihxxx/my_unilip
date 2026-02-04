@@ -15,8 +15,8 @@ from diffusers.models import AutoencoderDC
 from copy import deepcopy
 
 
-def build_repa_mlp(hidden_size, projector_dim, z_dim):
-    """构建REPA投影头MLP"""
+def build_alignment_mlp(hidden_size, projector_dim, z_dim):
+    """构建Alignment Distill投影头MLP (与VGT/REPA一致)"""
     return nn.Sequential(
         nn.Linear(hidden_size, projector_dim),
         nn.SiLU(),
@@ -252,50 +252,72 @@ class UniLIP_InternVL_MetaModel:
             p.requires_grad = connect_require_grad
         self.latent_queries.requires_grad = connect_require_grad
 
-        # ========== REPA相关初始化 ==========
-        # REPA: 对齐DiT中间层特征与Vision Encoder特征
-        self.enable_repa = getattr(model_args, 'enable_repa', False)
-        self.repa_loss_weight = getattr(model_args, 'repa_loss_weight', 0.5)
-        self.repa_encoder_depth = getattr(model_args, 'repa_encoder_depth', 6)
-        repa_projector_dim = getattr(model_args, 'repa_projector_dim', 2048)
+        # ========== Unified Distill Loss 初始化 ==========
+        # 统一的蒸馏损失框架，包含两个子损失：
+        # 1. Alignment Loss: DiT中间层 -> projector -> 对齐 vit_proj_features
+        # 2. Semantic Distill Loss: semantic_feat (经过cross stream) -> 对齐 vit_proj_features
+        # 两者使用相同的目标特征：vit_proj_features（经过pixel_shuffle + mlp1）
+        
+        self.enable_alignment_loss = getattr(model_args, 'enable_repa', False)  # 兼容旧参数名
+        self.alignment_loss_weight = getattr(model_args, 'repa_loss_weight', 0.5)
+        self.alignment_encoder_depth = getattr(model_args, 'repa_encoder_depth', 6)
+        alignment_projector_dim = getattr(model_args, 'repa_projector_dim', 2048)
+        
+        self.enable_semantic_distill = getattr(model_args, 'enable_semantic_distill', False)
+        self.semantic_distill_weight = getattr(model_args, 'semantic_distill_weight', 0.1)
         
         # 存储hook捕获的特征
         self._dit_intermediate_features = None
         self._dit_hook_handle = None
         
-        if self.enable_repa:
-            print(f"=== Initializing REPA ===")
-            print(f"  REPA loss weight: {self.repa_loss_weight}")
-            print(f"  REPA encoder depth (DiT layer): {self.repa_encoder_depth}")
-            
-            # 获取vision encoder的特征维度（作为REPA target）
-            vit_hidden_size = self.vision_tower.embeddings.patch_embedding.weight.shape[0]
+        # 获取投影后的特征维度（经过mlp1后的维度）
+        proj_hidden_size = self.multi_modal_projector[-1].weight.shape[-1]
+        
+        print(f"=== Initializing Unified Distill Loss ===")
+        print(f"  Target feature: vit_proj_features (after pixel_shuffle + mlp1, dim={proj_hidden_size})")
+        
+        # Alignment Distill Loss 初始化
+        if self.enable_alignment_loss:
+            print(f"  [Alignment Distill Loss] Enabled")
+            print(f"    - Weight: {self.alignment_loss_weight}")
+            print(f"    - DiT layer depth: {self.alignment_encoder_depth}")
             
             # 获取DiT transformer blocks的内部隐藏维度
-            # Sana DiT: inner_dim = num_attention_heads * attention_head_dim
             dit_config = self.dit.config
             if hasattr(dit_config, 'num_attention_heads') and hasattr(dit_config, 'attention_head_dim'):
                 dit_hidden_size = dit_config.num_attention_heads * dit_config.attention_head_dim
             else:
-                # fallback: 尝试从第一个transformer block获取
                 dit_hidden_size = self.dit.transformer_blocks[0].attn1.to_q.in_features
             
-            # 创建REPA投影头：将DiT中间层特征映射到vision encoder特征空间
-            self.repa_projector = build_repa_mlp(
+            # 创建对齐投影头：DiT中间层特征 -> 投影特征空间
+            self.alignment_projector = build_alignment_mlp(
                 dit_hidden_size, 
-                repa_projector_dim, 
-                vit_hidden_size  # 映射到vision encoder的特征维度
+                alignment_projector_dim, 
+                proj_hidden_size
             )
-            print(f"  REPA projector: DiT({dit_hidden_size}) -> {repa_projector_dim} -> ViT({vit_hidden_size})")
+            print(f"    - Projector: DiT({dit_hidden_size}) -> {alignment_projector_dim} -> Proj({proj_hidden_size})")
             
-            # REPA投影头需要训练
-            for p in self.repa_projector.parameters():
+            for p in self.alignment_projector.parameters():
                 p.requires_grad = True
             
             # 注册hook到DiT的指定层
             self._register_dit_hook()
         else:
-            self.repa_projector = None
+            self.alignment_projector = None
+            print(f"  [Alignment Distill Loss] Disabled")
+        
+        # Semantic Distill Loss 初始化
+        if self.enable_semantic_distill:
+            use_dual_stream = getattr(model_args, 'use_dual_stream', False)
+            if not use_dual_stream:
+                print(f"  [Semantic Distill Loss] Disabled (requires use_dual_stream=True)")
+                self.enable_semantic_distill = False
+            else:
+                print(f"  [Semantic Distill Loss] Enabled")
+                print(f"    - Weight: {self.semantic_distill_weight}")
+                print(f"    - Aligns semantic_feat (after cross-stream) with vit_proj_features")
+        else:
+            print(f"  [Semantic Distill Loss] Disabled")
     
     def _register_dit_hook(self):
         """在DiT的指定transformer层注册forward hook来捕获中间特征"""
@@ -304,7 +326,7 @@ class UniLIP_InternVL_MetaModel:
         
         # Sana DiT的transformer blocks在 dit.transformer_blocks
         if hasattr(self.dit, 'transformer_blocks'):
-            target_layer_idx = min(self.repa_encoder_depth - 1, len(self.dit.transformer_blocks) - 1)
+            target_layer_idx = min(self.alignment_encoder_depth - 1, len(self.dit.transformer_blocks) - 1)
             target_layer = self.dit.transformer_blocks[target_layer_idx]
             
             def hook_fn(module, input, output):
@@ -315,78 +337,93 @@ class UniLIP_InternVL_MetaModel:
                     self._dit_intermediate_features = output.clone()
             
             self._dit_hook_handle = target_layer.register_forward_hook(hook_fn)
-            print(f"  Registered REPA hook at DiT transformer_blocks[{target_layer_idx}]")
+            print(f"    - Registered hook at DiT transformer_blocks[{target_layer_idx}]")
         else:
-            print(f"  Warning: Could not find transformer_blocks in DiT, REPA disabled")
-            self.enable_repa = False
+            print(f"    - Warning: Could not find transformer_blocks in DiT, Alignment Loss disabled")
+            self.enable_alignment_loss = False
 
-    def extract_vision_features_for_repa(self, pixel_values):
+    def _pixel_shuffle(self, x, scale_factor=0.5):
+        """Pixel shuffle operation to match tokenizer implementation.
+        
+        Args:
+            x: (N, W, H, C) tensor
+            scale_factor: 0.5 means downsample spatial by 2x, upsample channels by 4x
+        Returns:
+            (N, H*scale, W*scale, C//(scale**2)) tensor
         """
-        提取vision encoder的中间层特征用于REPA对齐
+        n, w, h, c = x.size()
+        x = x.view(n, w, int(h * scale_factor), int(c / scale_factor))
+        x = x.permute(0, 2, 1, 3).contiguous()
+        x = x.view(n, int(h * scale_factor), int(w * scale_factor),
+                   int(c / (scale_factor * scale_factor)))
+        x = x.permute(0, 2, 1, 3).contiguous()
+        return x
+
+    def extract_vit_proj_features(self, pixel_values):
+        """
+        提取Vision Encoder的投影特征（经过pixel_shuffle + mlp1）
+        
+        作为Unified Distill Loss的共同目标特征：
+        - Alignment Loss: DiT中间层 -> projector -> 对齐此特征
+        - Semantic Distill Loss: semantic_feat (经过cross stream) -> 对齐此特征
+        
+        与tokenizer中distill_loss._get_ref_features保持一致
         
         Args:
             pixel_values: [B, C, H, W] 输入图像
         Returns:
-            vit_features: [B, N, D] vision encoder的patch特征
+            vit_proj_features: [B, N, D] vision encoder的投影特征
         """
-        # 是否解冻vision encoder决定是否使用no_grad
-        if not any(p.requires_grad for p in self.vision_tower.parameters()):
-            # vision encoder冻结，使用no_grad
-            with torch.no_grad():
-                vit_features = self._extract_vit_features_impl(pixel_values)
-        else:
-            # REPA-E模式，vision encoder可训练
-            vit_features = self._extract_vit_features_impl(pixel_values)
+        with torch.no_grad():
+            # 获取patch embeddings
+            vit_embeds = self.vision_tower.embeddings(pixel_values)
+            
+            # 通过所有encoder layers
+            for encoder_layer in self.vision_tower.encoder.layers:
+                vit_embeds = encoder_layer(vit_embeds)
+            
+            # 去掉CLS token，reshape，pixel_shuffle，mlp1
+            vit_embeds = vit_embeds[:, 1:, :].contiguous().float()
+            h = w = int(vit_embeds.shape[1] ** 0.5)
+            vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
+            vit_embeds = self._pixel_shuffle(vit_embeds)
+            vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
+            vit_proj_features = self.multi_modal_projector(vit_embeds)
         
-        return vit_features
+        return vit_proj_features
 
-    def _extract_vit_features_impl(self, pixel_values):
-        """提取Vision Encoder的最后一层特征
-        
-        参考tokenizer中dc_ae_vit_unified.py的实现方式
+    def compute_alignment_loss(self, dit_features, vit_proj_features):
         """
-        # 获取patch embeddings
-        vit_embeds = self.vision_tower.embeddings(pixel_values)
+        计算Alignment Distill损失（负余弦相似度，与VGT/REPA实现一致）
         
-        # 通过所有encoder layers（获取最后一层特征）
-        for encoder_layer in self.vision_tower.encoder.layers:
-            vit_embeds = encoder_layer(vit_embeds)
-        
-        # 去掉CLS token，只保留patch tokens
-        vit_features = vit_embeds[:, 1:, :].contiguous()
-        
-        return vit_features
-
-    def compute_repa_loss(self, dit_features, vit_features):
-        """
-        计算REPA对齐损失（负余弦相似度）
+        用于对齐DiT中间层特征与Vision Encoder投影特征
+        Loss = -mean(cosine_similarity(dit_features, vit_proj_features))
         
         Args:
-            dit_features: [B, N_dit, D] DiT中间层特征（经过projector投影后）
-            vit_features: [B, N_vit, D] Vision Encoder中间层特征
+            dit_features: [B, N_dit, D] DiT中间层特征（经过alignment_projector投影后）
+            vit_proj_features: [B, N_vit, D] Vision Encoder投影特征
         Returns:
-            repa_loss: REPA损失值
+            alignment_loss: 对齐损失值（范围约[-1, 0]，越小表示对齐越好）
         """
         # 对齐序列长度（通过adaptive pooling）
         N_dit = dit_features.shape[1]
-        N_vit = vit_features.shape[1]
+        N_vit = vit_proj_features.shape[1]
         
         if N_dit != N_vit:
             # 使用adaptive average pooling对齐长度
-            # 将vit_features pooling到dit_features的长度
-            vit_features = vit_features.permute(0, 2, 1)  # [B, D, N_vit]
-            vit_features = F.adaptive_avg_pool1d(vit_features, N_dit)
-            vit_features = vit_features.permute(0, 2, 1)  # [B, N_dit, D]
+            vit_proj_features = vit_proj_features.permute(0, 2, 1)  # [B, D, N_vit]
+            vit_proj_features = F.adaptive_avg_pool1d(vit_proj_features, N_dit)
+            vit_proj_features = vit_proj_features.permute(0, 2, 1)  # [B, N_dit, D]
         
         # L2 normalization
         dit_norm = F.normalize(dit_features, dim=-1)
-        vit_norm = F.normalize(vit_features, dim=-1)
+        vit_norm = F.normalize(vit_proj_features, dim=-1)
         
         # 负余弦相似度
         cos_sim = (dit_norm * vit_norm).sum(dim=-1)  # [B, N]
-        repa_loss = -cos_sim.mean()
+        alignment_loss = -cos_sim.mean()
         
-        return repa_loss
+        return alignment_loss
     
     def get_dit_intermediate_features(self):
         """获取hook捕获的DiT中间层特征"""
@@ -395,6 +432,53 @@ class UniLIP_InternVL_MetaModel:
     def clear_dit_intermediate_features(self):
         """清除存储的中间特征"""
         self._dit_intermediate_features = None
+
+    # ========== Semantic Distill Loss ==========
+    def get_semantic_features_for_distill(self, vit_embeds):
+        """
+        获取经过cross stream attention后的semantic_feat用于语义蒸馏损失
+        
+        Args:
+            vit_embeds: (B, N, llm_hidden_size) 来自vision encoder + projector的特征
+        Returns:
+            semantic_feat: (B, N, llm_hidden_size) 经过cross stream后的语义特征
+        """
+        if not hasattr(self, 'vae_decoder') or self.vae_decoder is None:
+            raise ValueError("vae_decoder is not initialized")
+        
+        if not self.vae_decoder.use_dual_stream:
+            raise ValueError("Semantic distill loss requires use_dual_stream=True")
+        
+        return self.vae_decoder.get_semantic_features_with_cross_stream(vit_embeds)
+    
+    def compute_semantic_distill_loss(self, semantic_feat, vit_proj_features):
+        """
+        计算语义蒸馏损失：semantic_feat vs vision encoder投影特征
+        
+        与tokenizer训练时的distill_loss保持一致：
+        - vit_proj_features: 经过pixel_shuffle + mlp1的特征
+        - semantic_feat: 经过dual stream的semantic_transformer + cross_stream的特征
+        
+        Args:
+            semantic_feat: (B, N, D) 经过cross stream后的语义特征
+            vit_proj_features: (B, N, D) vision encoder的投影特征（经过pixel_shuffle + mlp1）
+        Returns:
+            semantic_distill_loss: MSE损失值
+        """
+        # 确保序列长度一致
+        N_sem = semantic_feat.shape[1]
+        N_vit = vit_proj_features.shape[1]
+        
+        if N_sem != N_vit:
+            # 使用adaptive average pooling对齐长度
+            vit_proj_features = vit_proj_features.permute(0, 2, 1)  # [B, D, N_vit]
+            vit_proj_features = F.adaptive_avg_pool1d(vit_proj_features, N_sem)
+            vit_proj_features = vit_proj_features.permute(0, 2, 1)  # [B, N_sem, D]
+        
+        # MSE损失
+        semantic_distill_loss = F.mse_loss(semantic_feat, vit_proj_features)
+        
+        return semantic_distill_loss
 
 
 class UniLIP_InternVL_MetaForCausalLM(ABC):

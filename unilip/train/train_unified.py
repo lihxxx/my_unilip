@@ -1,6 +1,6 @@
 """
 统一训练脚本，合并Stage1, Stage2, Stage3训练代码
-支持REPA loss来优化生成能力
+支持Alignment Distill loss来优化生成能力
 
 关键参数:
     --use_vae_model True/False       # Stage1需要True，Stage2/3用False
@@ -10,8 +10,8 @@
     --gen_image_folder path1,path2   # 支持多路径（逗号分隔）
     --edit_image_folder path         # 编辑数据路径（Stage2/3需要）
     
-REPA模式:
-    --enable_repa True --repa_loss_weight 0.5  # 启用REPA, 类似原版REPA
+Alignment Distill模式:
+    --enable_repa True --repa_loss_weight 0.5  # 启用Alignment Distill Loss
     --enable_repa True --unfreeze_vision_encoder True  # 类似REPA-E, 解冻vision encoder
 """
 
@@ -106,12 +106,13 @@ class ModelArguments:
     # 模型类型选择
     use_vae_model: bool = field(default=False, metadata={"help": "使用VAE版本模型（Stage1需要）"})
     
-    # REPA相关参数
-    enable_repa: bool = field(default=False, metadata={"help": "是否启用REPA loss"})
-    repa_loss_weight: float = field(default=0.5, metadata={"help": "REPA loss权重"})
-    repa_encoder_depth: int = field(default=6, metadata={"help": "在encoder第几层提取REPA特征"})
-    repa_projector_dim: int = field(default=2048, metadata={"help": "REPA投影头中间维度"})
-    unfreeze_vision_encoder: bool = field(default=False, metadata={"help": "是否解冻vision encoder（类似REPA-E）"})
+    # Alignment Distill Loss 参数
+    # DiT中间层 -> projector -> 对齐 vit_proj_features (与VGT/REPA计算方式一致: 负余弦相似度)
+    enable_repa: bool = field(default=False, metadata={"help": "是否启用Alignment Distill Loss"})
+    repa_loss_weight: float = field(default=0.5, metadata={"help": "Alignment Distill Loss权重"})
+    repa_encoder_depth: int = field(default=6, metadata={"help": "在DiT第几层提取中间特征"})
+    repa_projector_dim: int = field(default=2048, metadata={"help": "Alignment投影头中间维度"})
+    unfreeze_vision_encoder: bool = field(default=False, metadata={"help": "是否解冻vision encoder"})
     
     # Dual Stream相关参数
     use_dual_stream: bool = field(default=False, metadata={"help": "是否使用dual stream架构"})
@@ -122,6 +123,11 @@ class ModelArguments:
     # Cross-stream交互参数
     use_cross_stream: bool = field(default=False, metadata={"help": "是否使用跨流注意力交互"})
     cross_stream_num_heads: int = field(default=16, metadata={"help": "跨流注意力头数"})
+    
+    # Semantic Distill Loss 参数
+    # semantic_feat (经过cross stream) -> 对齐 vit_proj_features
+    enable_semantic_distill: bool = field(default=False, metadata={"help": "是否启用Semantic Distill Loss (需要use_dual_stream=True)"})
+    semantic_distill_weight: float = field(default=0.1, metadata={"help": "Semantic Distill Loss权重"})
 
 
 @dataclass
@@ -296,17 +302,17 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: st
         else:
             torch.save(weight_to_save, os.path.join(output_dir, f"gen_projector.bin"))
     
-    # Save REPA projector if exists
-    keys_to_match = ["repa_projector"]
+    # Save Alignment projector if exists
+    keys_to_match = ["alignment_projector"]
     weight_to_save = get_mm_adapter_state_maybe_zero_3(trainer.model.named_parameters(), keys_to_match)
     if len(weight_to_save) > 0:
         if trainer.args.local_rank == 0 or trainer.args.local_rank == -1:
             if current_folder.startswith("checkpoint-"):
-                repa_folder = os.path.join(parent_folder, "repa_projector")
-                os.makedirs(repa_folder, exist_ok=True)
-                torch.save(weight_to_save, os.path.join(repa_folder, f"{current_folder}.bin"))
+                alignment_folder = os.path.join(parent_folder, "alignment_projector")
+                os.makedirs(alignment_folder, exist_ok=True)
+                torch.save(weight_to_save, os.path.join(alignment_folder, f"{current_folder}.bin"))
             else:
-                torch.save(weight_to_save, os.path.join(output_dir, f"repa_projector.bin"))
+                torch.save(weight_to_save, os.path.join(output_dir, f"alignment_projector.bin"))
 
     if trainer.deepspeed:
         torch.cuda.synchronize()
@@ -1010,7 +1016,7 @@ def train(attn_implementation=None):
         conversation_lib.default_conversation = conversation_lib.conv_templates["llama3"]
     rank0_print(f"Using conversation format: {conversation_lib.default_conversation.version}")
 
-    # 初始化vision modules，传入REPA参数
+    # 初始化vision modules，传入Alignment Distill参数
     model.get_model().initialize_vision_modules(model_args=model_args, fsdp=training_args.fsdp)
 
     if not model_args.fix_vit:
@@ -1023,9 +1029,9 @@ def train(attn_implementation=None):
         for p in model.get_model().language_model.parameters():
             p.requires_grad = True
 
-    # REPA模式: 解冻vision encoder
+    # Alignment Distill模式: 解冻vision encoder (类似REPA-E)
     if model_args.enable_repa and model_args.unfreeze_vision_encoder:
-        rank0_print("=== REPA-E mode: Unfreezing vision encoder ===")
+        rank0_print("=== Alignment Distill mode (REPA-E style): Unfreezing vision encoder ===")
         for p in model.get_model().vision_tower.parameters():
             p.requires_grad = True
 
@@ -1051,10 +1057,14 @@ def train(attn_implementation=None):
     model.config.tune_mm_mlp_adapter = training_args.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter
     model.config.freeze_mm_mlp_adapter = training_args.freeze_mm_mlp_adapter
 
-    # 保存REPA配置到模型config
-    model.config.enable_repa = model_args.enable_repa
+    # 保存Alignment Distill配置到模型config（使用兼容的参数名）
+    model.config.enable_repa = model_args.enable_repa  # 保持兼容
     model.config.repa_loss_weight = model_args.repa_loss_weight
     model.config.repa_encoder_depth = model_args.repa_encoder_depth
+    
+    # 保存Semantic Distill配置到模型config
+    model.config.enable_semantic_distill = model_args.enable_semantic_distill
+    model.config.semantic_distill_weight = model_args.semantic_distill_weight
 
     # 计算参数
     total_params = sum(p.numel() for p in model.get_model().parameters())

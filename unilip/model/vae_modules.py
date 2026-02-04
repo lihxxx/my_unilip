@@ -874,6 +874,36 @@ class DCAE_Decoder(nn.Module):
         semantic_feat = self.semantic_transformer(vit_embeds)
         return semantic_feat
     
+    def get_semantic_features_with_cross_stream(self, vit_embeds):
+        """
+        Get semantic features after cross-stream attention (only available when use_dual_stream=True 
+        and use_cross_stream=True).
+        
+        This can be used for semantic distillation loss computation in unified model training.
+        The semantic_feat after cross-stream attention has exchanged information with pixel stream,
+        which should maintain alignment with vision encoder features.
+        
+        Args:
+            vit_embeds: Input features of shape (B, N, llm_hidden_size)
+            
+        Returns:
+            semantic_feat: Semantic features after cross-stream attention of shape (B, N, llm_hidden_size)
+        """
+        if not self.use_dual_stream:
+            raise ValueError("get_semantic_features_with_cross_stream is only available when use_dual_stream=True")
+        
+        # Semantic stream: vit_embeds -> TransformerEncoder -> semantic_feat
+        semantic_feat = self.semantic_transformer(vit_embeds)  # (B, N, llm_hidden_size)
+        
+        # Pixel stream: vit_embeds -> TransformerEncoder -> pixel_feat
+        pixel_feat = self.pixel_transformer(vit_embeds)  # (B, N, llm_hidden_size)
+        
+        # Cross-stream attention (if enabled): information exchange between streams
+        if self.use_cross_stream:
+            semantic_feat, pixel_feat = self.cross_stream_attention(semantic_feat, pixel_feat)
+        
+        return semantic_feat
+    
     def get_pixel_latent(self, vit_embeds):
         """
         Get pixel latent from the pixel stream (only available when use_dual_stream=True).

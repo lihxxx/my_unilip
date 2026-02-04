@@ -1,14 +1,14 @@
 #!/bin/bash
 #
 # 统一训练脚本
-# 支持Stage 1/2/3训练和REPA损失
+# 支持Stage 1/2/3训练和Alignment Distill损失
 #
 # Usage:
 #   bash run_unilip_unified.sh --stage 1              # Stage1训练
 #   bash run_unilip_unified.sh --stage 2              # Stage2训练
 #   bash run_unilip_unified.sh --stage 3              # Stage3 SFT
-#   bash run_unilip_unified.sh --stage 3 --repa       # Stage3 + REPA
-#   bash run_unilip_unified.sh --stage 3 --repa-e     # Stage3 + REPA-E (解冻vision encoder)
+#   bash run_unilip_unified.sh --stage 3 --repa       # Stage3 + Alignment Distill
+#   bash run_unilip_unified.sh --stage 3 --repa-e     # Stage3 + Alignment Distill (解冻vision encoder)
 #
 
 set -e
@@ -54,11 +54,11 @@ done
 echo "============================================"
 echo "Training Configuration:"
 echo "  Stage: ${STAGE}"
-echo "  Enable REPA: ${ENABLE_REPA}"
+echo "  Enable Alignment Distill: ${ENABLE_REPA}"
 echo "  Unfreeze Vision Encoder: ${UNFREEZE_VISION_ENCODER}"
 if [ "$ENABLE_REPA" = "True" ]; then
-    echo "  REPA Loss Weight: ${REPA_LOSS_WEIGHT}"
-    echo "  REPA Encoder Depth: ${REPA_ENCODER_DEPTH}"
+    echo "  Alignment Distill Loss Weight: ${REPA_LOSS_WEIGHT}"
+    echo "  Alignment Encoder Depth: ${REPA_ENCODER_DEPTH}"
 fi
 echo "============================================"
 
@@ -103,12 +103,12 @@ else
     export IMAGE_SIZE=448
 fi
 
-# REPA模式下更新名称
+# Alignment Distill模式下更新名称
 if [ "$ENABLE_REPA" = "True" ]; then
     if [ "$UNFREEZE_VISION_ENCODER" = "True" ]; then
-        export WANDB_NAME="${WANDB_NAME}_repa_e"
+        export WANDB_NAME="${WANDB_NAME}_align_distill_e"
     else
-        export WANDB_NAME="${WANDB_NAME}_repa"
+        export WANDB_NAME="${WANDB_NAME}_align_distill"
     fi
 fi
 
@@ -191,7 +191,7 @@ if [ "$EDIT_REPEAT" -gt 0 ]; then
     TRAIN_CMD="${TRAIN_CMD} --edit_repeat ${EDIT_REPEAT}"
 fi
 
-# ============== REPA参数 ==============
+# ============== Alignment Distill参数 ==============
 if [ "$ENABLE_REPA" = "True" ]; then
     TRAIN_CMD="${TRAIN_CMD} \
         --enable_repa True \

@@ -4,7 +4,7 @@
 #
 # 使用说明:
 #   1. 修改下方路径配置
-#   2. 选择训练模式（Stage 1/2/3，是否启用REPA）
+#   2. 选择训练模式（Stage 1/2/3，是否启用Alignment Distill）
 #   3. 运行: bash run_unilip_1b_unified.sh
 #
 
@@ -28,15 +28,15 @@ export WANDB_PROJECT="unilip_umm"
 # Stage 3: SFT微调
 # bash run_unilip_unified.sh --stage 3
 
-# Stage 3 + REPA: SFT微调 + REPA损失（类似原版REPA，冻结vision encoder）
+# Stage 3 + Alignment Distill: SFT微调 + Alignment Distill损失
 # bash run_unilip_unified.sh --stage 3 --repa --repa-weight 0.5 --repa-depth 6
 
-# Stage 3 + REPA-E: SFT微调 + REPA损失（类似REPA-E，解冻vision encoder）
+# Stage 3 + Alignment Distill-E: SFT微调 + Alignment Distill损失（解冻vision encoder）
 # bash run_unilip_unified.sh --stage 3 --repa-e --repa-weight 0.5 --repa-depth 6
 
-# ============== 默认运行Stage 3 + REPA ==============
+# ============== 默认运行Stage 3 + Alignment Distill ==============
 unset WANDB_DISABLED
-export WANDB_NAME="unilip_intern_vl_1b_sft_repa"
+export WANDB_NAME="unilip_intern_vl_1b_sft_unified_distill"
 export OUTPUT_FOLDER="${BASE_DIR}/results/${WANDB_NAME}"
 export GEN_IMG_FOLDER="${BASE_DIR}/data/gen_sft"
 export EDIT_IMG_FOLDER="${BASE_DIR}/data/edit_sft"
