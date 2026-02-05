@@ -383,11 +383,14 @@ class UniLIP_InternVL_MetaModel:
                 vit_embeds = encoder_layer(vit_embeds)
             
             # 去掉CLS token，reshape，pixel_shuffle，mlp1
-            vit_embeds = vit_embeds[:, 1:, :].contiguous().float()
+            vit_embeds = vit_embeds[:, 1:, :].contiguous()
             h = w = int(vit_embeds.shape[1] ** 0.5)
             vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
             vit_embeds = self._pixel_shuffle(vit_embeds)
             vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
+            # 确保输入dtype与projector一致，避免LayerNorm精度不匹配
+            proj_dtype = next(self.multi_modal_projector.parameters()).dtype
+            vit_embeds = vit_embeds.to(dtype=proj_dtype)
             vit_proj_features = self.multi_modal_projector(vit_embeds)
         
         return vit_proj_features
