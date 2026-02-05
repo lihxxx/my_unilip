@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "32gpu_Freeze_1b_dual_stream01CrossTrans_224E256_semae316_pretrain_GANnull_lr3ex01E1e4W3k_100k"
-    output_dir: "checkpoints/32gpu_Freeze_1b_dual_stream01CrossTrans_224E256_semae316_pretrain_GANnull_lr3ex01E1e4W10k_100k"
+    name: "4gpu_Freeze_1b_dual_stream01CrossTrans_224E256_semae316_pretrain_GANnull_lr2ex01E1e5W10k_400k"
+    output_dir: "checkpoints/4gpu_Freeze_1b_dual_stream01CrossTrans_224E256_semae316_pretrain_GANnull_lr2ex01E1e5W10k_400k"
     max_train_examples: 40_000_000
     save_every: 25_000
     eval_every: 25_000
@@ -95,8 +95,8 @@ dataset:
 optimizer:
     name: adamw 
     params:
-        learning_rate: 3e-4
-        discriminator_learning_rate: 3e-4
+        learning_rate: 2e-4
+        discriminator_learning_rate: 2e-4
         beta1: 0.9
         beta2: 0.999
         weight_decay: 1e-4
@@ -108,8 +108,8 @@ lr_scheduler:
     scheduler: "cosine"
     params:
         learning_rate: ${optimizer.params.learning_rate}
-        warmup_steps: 3_000
-        end_lr: 1e-4
+        warmup_steps: 10_000
+        end_lr: 1e-5
 
 
 training:
