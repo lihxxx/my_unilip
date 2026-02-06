@@ -1,15 +1,15 @@
 experiment:
     project: "unilip"
-    name: "16gpu_Freeze_1b_dual_stream01CrossTrans_224E256_semae316_pretrain_GANnull_lr3ex01E1e4W3k_100k"
-    output_dir: "checkpoints/16gpu_Freeze_1b_dual_stream01CrossTrans_224E256_semae316_pretrain_GANnull_lr3ex01E1e4W3k_100k"
+    name: "4gpu_stage2_1b_dual_stream10CrossTrans_224E256_semae316_pretrain_GAN200k_lr2ex005E1e5W10k_400k"
+    output_dir: "checkpoints/4gpu_stage2_1b_dual_stream10CrossTrans_224E256_semae316_pretrain_GAN200k_lr2ex005E1e5W10k_400k"
     max_train_examples: 40_000_000
-    save_every: 10_000
-    eval_every: 10_000
+    save_every: 25_000
+    eval_every: 25_000
     eval_max_samples: -1            # 训练时只评估500条数据，设为-1表示全量评估
     eval_resolution: 256            # 评估时将图像resize到此分辨率（默认256），设为-1或0则使用原始分辨率
     generate_every: 5_000
     log_every: 50
-    log_grad_norm_every: 500
+    log_grad_norm_every: 1_000
     resume: True
     init_weight: ""
 
@@ -21,8 +21,8 @@ model:
     mllm_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B"
     dc_ae_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers"
     # Stage2 specific
-    stage1_ckpt: ""
-    freeze_encoder: True
+    stage1_ckpt: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/Freeze_1b_dual_stream01CrossTrans_224E256_semae316_pretrain_GANnull_lr2ex01E1e5W10k_200k/checkpoint-200000/ema_model/pytorch_model.bin"
+    freeze_encoder: False
     output_distill_feat: True
     disable_drop_path: False
     use_gradient_checkpoint: False
@@ -48,7 +48,7 @@ model:
 
 losses:
     name: ReconstructionLoss_Unified
-    discriminator_start: 20000_000
+    discriminator_start: 200_000
     quantizer_weight: 1.0
     discriminator_factor: 1.0
     discriminator_weight: 0.1
@@ -58,11 +58,11 @@ losses:
     # Semantic Distillation loss (for feature alignment with frozen encoder)
     # In dual-stream mode, semantic_feat is used for distillation instead of vit_embeds
     distill_loss: /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B
-    distill_weight: 0.1
+    distill_weight: 1.0
     
     # Pixel Distillation loss (for pixel stream alignment with frozen DC-AE encoder)
     # pixel_latent (32-dim) is compared with DC-AE encoder output
-    pixel_distill_weight: 0.1
+    pixel_distill_weight: 1.0
     
     # Pixel reconstruction loss
     reconstruction_loss: "l2"
@@ -95,21 +95,21 @@ dataset:
 optimizer:
     name: adamw 
     params:
-        learning_rate: 3e-4
-        discriminator_learning_rate: 3e-4
+        learning_rate: 2e-4
+        discriminator_learning_rate: 2e-4
         beta1: 0.9
         beta2: 0.999
         weight_decay: 1e-4
-        use_encoder_lr_scale: False
-        encoder_lr_scale: 0.1
+        use_encoder_lr_scale: True
+        encoder_lr_scale: 0.05
 
 
 lr_scheduler:
     scheduler: "cosine"
     params:
         learning_rate: ${optimizer.params.learning_rate}
-        warmup_steps: 3_000
-        end_lr: 1e-4
+        warmup_steps: 10_000
+        end_lr: 1e-5
 
 
 training:
@@ -122,6 +122,6 @@ training:
     ddp_find_unused_parameters: False
     use_ema: True
     seed: 42
-    max_train_steps: 100_000
+    max_train_steps: 400_000
     num_generated_images: 8
     max_grad_norm: 1.0

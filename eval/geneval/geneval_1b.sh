@@ -3,12 +3,12 @@
 
 
 
-MODEL="/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/results/unilip_intern_vl_1b_sft_self_repa_w05xd6/checkpoint-2385"
+MODEL="/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/results/unilip_intern_vl_1b_sft_alignment_distill10_D6/checkpoint-2385"
 CLS_NAME="UniLIP_InternVLForCausalLM"
 
 
 # Total number of GPUs/chunks.
-N_CHUNKS=2
+N_CHUNKS=1
 
 # Launch processes in parallel for each GPU/chunk.
 for i in $(seq 0 $(($N_CHUNKS - 1))); do
