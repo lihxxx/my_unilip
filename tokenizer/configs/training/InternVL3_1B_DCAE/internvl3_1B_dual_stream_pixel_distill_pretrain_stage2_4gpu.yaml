@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "4gpu_stage2_1b_dual_stream10CrossTrans_224E256_semae316_pretrain_GAN200k_lr2ex005E1e5W10k_400k"
-    output_dir: "checkpoints/4gpu_stage2_1b_dual_stream10CrossTrans_224E256_semae316_pretrain_GAN200k_lr2ex005E1e5W10k_400k"
+    name: "4gpu_stage2_repostage1_1b_dual_stream10CrossTrans_224E256_semae316_pretrain_GAN200k_lr1ex01E1e5W10k_400k"
+    output_dir: "checkpoints/4gpu_stage2_repostage1_1b_dual_stream10CrossTrans_224E256_semae316_pretrain_GAN200k_lr1ex01E1e5W10k_400k"
     max_train_examples: 40_000_000
     save_every: 25_000
     eval_every: 25_000
@@ -21,7 +21,7 @@ model:
     mllm_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B"
     dc_ae_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers"
     # Stage2 specific
-    stage1_ckpt: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/Freeze_1b_dual_stream01CrossTrans_224E256_semae316_pretrain_GANnull_lr2ex01E1e5W10k_200k/checkpoint-200000/ema_model/pytorch_model.bin"
+    stage1_ckpt: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/4gpu_Freeze_1b_dual_stream01CrossTrans_224E256_semae316_pretrain_GANnull_lr2ex01E1e5W10k_400k/checkpoint-400000/ema_model/pytorch_model.bin"
     freeze_encoder: False
     output_distill_feat: True
     disable_drop_path: False
@@ -95,13 +95,13 @@ dataset:
 optimizer:
     name: adamw 
     params:
-        learning_rate: 2e-4
-        discriminator_learning_rate: 2e-4
+        learning_rate: 1e-4
+        discriminator_learning_rate: 1e-4
         beta1: 0.9
         beta2: 0.999
         weight_decay: 1e-4
         use_encoder_lr_scale: True
-        encoder_lr_scale: 0.05
+        encoder_lr_scale: 0.1
 
 
 lr_scheduler:

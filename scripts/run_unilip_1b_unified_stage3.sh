@@ -16,7 +16,7 @@ export EDIT_IMG_FOLDER="${BASE_DIR}/data/edit_sft"
 unset WANDB_DISABLED
 export WANDB_API_KEY="3ed65eb52edcc37a5e278a82dd874b44d4ffadb7"
 export WANDB_PROJECT="unilip_umm"
-export WANDB_NAME="unilip_intern_vl_1b_sft_alignment_distill10_D6"
+export WANDB_NAME="unilip_intern_vl_1b_sft_alignment_distill05_D6"
 export OUTPUT_FOLDER="${BASE_DIR}/results/${WANDB_NAME}"
 
 # ============== Unified Distill Loss 配置 ==============
@@ -25,7 +25,7 @@ export OUTPUT_FOLDER="${BASE_DIR}/results/${WANDB_NAME}"
 
 # Alignment Distill Loss：DiT中间层 -> projector -> 对齐 vit_proj_features (负余弦相似度)
 ENABLE_ALIGNMENT=True
-ALIGNMENT_LOSS_WEIGHT=1.0
+ALIGNMENT_LOSS_WEIGHT=0.5
 ALIGNMENT_ENCODER_DEPTH=6
 
 # Semantic Distill Loss：semantic_feat (经过cross stream) -> 对齐 vit_proj_features

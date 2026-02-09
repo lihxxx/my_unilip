@@ -1,6 +1,6 @@
 experiment:
     project: "unilip"
-    name: "16gpu_stage2_1b_dual_stream10CrossTrans_224E256_semae316_pretrain_GAN30k_lr1ex01E1e5W3k_100k"
+    name: "16gpu_stage2_1b_dual_stream10_disS20_CrossTrans_224E256_semae316_pretrain_GAN30k_lr1ex01E1e5W3k_100k"
     output_dir: "checkpoints/16gpu_stage2_1b_dual_stream10CrossTrans_224E256_semae316_pretrain_GAN30k_lr1ex01E1e5W3k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
