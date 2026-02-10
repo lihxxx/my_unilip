@@ -365,10 +365,21 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         vit_dim = model.vision_model.embeddings.patch_embedding.weight.shape[0]
         llm_hidden_size = model.config.llm_config.hidden_size
 
-        # Check if semantic AE is enabled
-        self.use_semantic_ae = config.model.get("use_semantic_ae", False)
-        # Check if dual stream is enabled
-        self.use_dual_stream = config.model.get("use_dual_stream", False)
+        # Architecture type selection
+        # Supported types:
+        #   - "dual_stream_trans": Dual stream with transformer encoders and cross-stream attention
+        #   - "dual_stream_simple": Dual stream with only down blocks (no transformers)
+        #   - "dual_stream_pixeltrans": Dual stream with pixel transformer only (semantic is simple)
+        #   - "semantic_ae": Semantic autoencoder (PS-VAE style)
+        #   - "direct": Original direct projection design (default)
+        self.arch_type = config.model.get("arch_type", "direct")
+        
+        # Validate architecture type
+        valid_types = ["dual_stream_trans", "dual_stream_simple", "dual_stream_pixeltrans", "semantic_ae", "direct"]
+        if self.arch_type not in valid_types:
+            raise ValueError(f"Invalid arch_type: {self.arch_type}. Must be one of {valid_types}")
+        
+        print(f"Architecture type: {self.arch_type}")
         
         # Semantic AE config (PS-VAE style)
         # Based on paper: https://arxiv.org/pdf/2512.17909
@@ -396,7 +407,7 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         self.use_cross_stream = dual_stream_config.get("use_cross_stream", False)
         self.cross_stream_num_heads = dual_stream_config.get("cross_stream_num_heads", 16)
         
-        if self.use_dual_stream:
+        if self.arch_type == "dual_stream_trans":
             # ============ Dual Stream Architecture ============
             # Stream 1 (Semantic): vit_embeds -> TransformerEncoder -> semantic_feat (for distill_loss)
             #                      -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
@@ -476,10 +487,112 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
                 nn.Linear(64, 32),
             )
             
-            print(f"Dual Stream enabled with num_layers={self.dual_stream_num_layers}, "
+            print(f"Dual Stream (Transformer) enabled with num_layers={self.dual_stream_num_layers}, "
                   f"num_heads={self.dual_stream_num_heads}, use_cross_stream={self.use_cross_stream}")
                   
-        elif self.use_semantic_ae:
+        elif self.arch_type == "dual_stream_simple":
+            # ============ Dual Stream Simple Architecture ============
+            # Simplified dual stream without transformers, only down blocks
+            # Stream 1 (Semantic): vit_embeds -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
+            # Stream 2 (Pixel): vit_embeds -> pixel_down_blocks -> pixel_down_mlp -> 32-dim
+            # Fusion: concat(32, 32) -> 64-dim -> fusion_layer -> 32-dim
+            
+            # Semantic stream: down_blocks -> down_mlp (llm_hidden_size -> 32)
+            semantic_down_blocks = []
+            for i in range(3):
+                semantic_down_blocks.append(ResBlock(llm_hidden_size))
+            self.semantic_down_blocks = nn.ModuleList(semantic_down_blocks)
+            self.semantic_down_mlp = nn.Sequential(
+                nn.LayerNorm(llm_hidden_size),
+                nn.Linear(llm_hidden_size, 32),
+                nn.GELU(),
+                nn.Linear(32, 32),
+            )
+            
+            # Pixel stream: down_blocks -> down_mlp (llm_hidden_size -> 32)
+            pixel_down_blocks = []
+            for i in range(3):
+                pixel_down_blocks.append(ResBlock(llm_hidden_size))
+            self.pixel_down_blocks = nn.ModuleList(pixel_down_blocks)
+            self.pixel_down_mlp = nn.Sequential(
+                nn.LayerNorm(llm_hidden_size),
+                nn.Linear(llm_hidden_size, 32),
+                nn.GELU(),
+                nn.Linear(32, 32),
+            )
+            
+            # Fusion layer: 64 -> 32
+            self.fusion_layer = nn.Sequential(
+                nn.LayerNorm(64),
+                nn.Linear(64, 64),
+                nn.GELU(),
+                nn.Linear(64, 32),
+            )
+            
+            print(f"Dual Stream (Simple) enabled - direct down blocks without transformers")
+                  
+        elif self.arch_type == "dual_stream_pixeltrans":
+            # ============ Dual Stream Pixel Transformer Architecture ============
+            # Semantic stream is simple (direct down blocks)
+            # Pixel stream has transformer for better reconstruction capability
+            # Stream 1 (Semantic): vit_embeds -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
+            # Stream 2 (Pixel): vit_embeds -> pixel_transformer -> pixel_feat 
+            #                   -> pixel_down_blocks -> pixel_down_mlp -> 32-dim
+            # Fusion: concat(32, 32) -> 64-dim -> fusion_layer -> 32-dim
+            
+            # Pixel stream: TransformerEncoder for pixel feature extraction
+            pixel_encoder_layer = nn.TransformerEncoderLayer(
+                d_model=llm_hidden_size,
+                nhead=self.dual_stream_num_heads,
+                dim_feedforward=int(llm_hidden_size * self.dual_stream_mlp_ratio),
+                dropout=self.dual_stream_dropout,
+                activation='gelu',
+                batch_first=True,
+                norm_first=True
+            )
+            self.pixel_transformer = nn.TransformerEncoder(
+                pixel_encoder_layer,
+                num_layers=self.dual_stream_num_layers
+            )
+            
+            # Semantic stream: simple down_blocks (no transformer, preserve semantic)
+            semantic_down_blocks = []
+            for i in range(3):
+                semantic_down_blocks.append(ResBlock(llm_hidden_size))
+            self.semantic_down_blocks = nn.ModuleList(semantic_down_blocks)
+            self.semantic_down_mlp = nn.Sequential(
+                nn.LayerNorm(llm_hidden_size),
+                nn.Linear(llm_hidden_size, 32),
+                nn.GELU(),
+                nn.Linear(32, 32),
+            )
+            
+            # Pixel stream: down_blocks after transformer
+            pixel_down_blocks = []
+            for i in range(3):
+                pixel_down_blocks.append(ResBlock(llm_hidden_size))
+            self.pixel_down_blocks = nn.ModuleList(pixel_down_blocks)
+            self.pixel_down_mlp = nn.Sequential(
+                nn.LayerNorm(llm_hidden_size),
+                nn.Linear(llm_hidden_size, 32),
+                nn.GELU(),
+                nn.Linear(32, 32),
+            )
+            
+            # Fusion layer: 64 -> 32
+            self.fusion_layer = nn.Sequential(
+                nn.LayerNorm(64),
+                nn.Linear(64, 64),
+                nn.GELU(),
+                nn.Linear(64, 32),
+            )
+            
+            print(f"Dual Stream (PixelTrans) enabled with num_layers={self.dual_stream_num_layers}, "
+                  f"num_heads={self.dual_stream_num_heads}")
+            print(f"  Semantic stream: simple down blocks (preserve understanding)")
+            print(f"  Pixel stream: transformer + down blocks (better reconstruction)")
+                  
+        elif self.arch_type == "semantic_ae":
             # Build Semantic Encoder and Decoder (PS-VAE style)
             # Reference: vlvae_intervl_semae.py
             # Encoder and Decoder can have different configurations
@@ -754,7 +867,7 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         if self.use_layerwise_distill and len(layer_features) > 0:
             result_dict['layer_features'] = layer_features
         
-        if self.use_dual_stream:
+        if self.arch_type == "dual_stream_trans":
             # ============ Dual Stream Architecture ============
             # Stream 1 (Semantic): vit_embeds -> semantic_transformer -> semantic_feat
             # Stream 2 (Pixel): vit_embeds -> pixel_transformer -> pixel_feat
@@ -798,7 +911,75 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
             fused_latent = torch.cat([semantic_latent, pixel_latent], dim=-1)  # (B, N, 64)
             latent_for_decoder = self.fusion_layer(fused_latent)  # (B, N, 32)
             
-        elif self.use_semantic_ae:
+        elif self.arch_type == "dual_stream_simple":
+            # ============ Dual Stream Simple Architecture ============
+            # Simplified dual stream: directly apply down blocks without transformers
+            # Stream 1 (Semantic): vit_embeds -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
+            # Stream 2 (Pixel): vit_embeds -> pixel_down_blocks -> pixel_down_mlp -> 32-dim
+            # Fusion: concat(32, 32) -> 64-dim -> fusion_layer -> 32-dim
+            
+            # Keep vit_embeds for distillation (no transformer processing)
+            distill_output = vit_embeds.clone()
+            
+            # Semantic stream: vit_embeds -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
+            semantic_latent = vit_embeds
+            for block in self.semantic_down_blocks:
+                semantic_latent = block(semantic_latent)
+            semantic_latent = self.semantic_down_mlp(semantic_latent)  # (B, N, 32)
+            
+            # Pixel stream: vit_embeds -> pixel_down_blocks -> pixel_down_mlp -> 32-dim
+            pixel_latent = vit_embeds
+            for block in self.pixel_down_blocks:
+                pixel_latent = block(pixel_latent)
+            pixel_latent = self.pixel_down_mlp(pixel_latent)  # (B, N, 32)
+            
+            # Store pixel_latent for pixel distillation loss
+            result_dict['pixel_latent'] = pixel_latent.clone()
+            
+            # Fusion: concat(semantic_latent, pixel_latent) -> fusion_layer -> 32-dim
+            fused_latent = torch.cat([semantic_latent, pixel_latent], dim=-1)  # (B, N, 64)
+            latent_for_decoder = self.fusion_layer(fused_latent)  # (B, N, 32)
+            
+        elif self.arch_type == "dual_stream_pixeltrans":
+            # ============ Dual Stream Pixel Transformer Architecture ============
+            # Semantic stream is simple (preserve understanding)
+            # Pixel stream has transformer (better reconstruction)
+            # Stream 1 (Semantic): vit_embeds -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
+            # Stream 2 (Pixel): vit_embeds -> pixel_transformer -> pixel_feat
+            #                   -> pixel_down_blocks -> pixel_down_mlp -> 32-dim
+            # Fusion: concat(32, 32) -> 64-dim -> fusion_layer -> 32-dim
+            
+            # Keep vit_embeds for semantic distillation (no transformer processing)
+            distill_output = vit_embeds.clone()
+            
+            # Semantic stream: vit_embeds -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
+            # Keep simple to preserve semantic understanding
+            semantic_latent = vit_embeds
+            for block in self.semantic_down_blocks:
+                semantic_latent = block(semantic_latent)
+            semantic_latent = self.semantic_down_mlp(semantic_latent)  # (B, N, 32)
+            
+            # Pixel stream: vit_embeds -> pixel_transformer -> pixel_feat
+            # Use transformer for better reconstruction capability
+            pixel_feat = self.pixel_transformer(vit_embeds)  # (B, N, llm_hidden_size)
+            
+            # Store pixel_feat (before down) for pixel distillation if needed
+            result_dict['pixel_feat'] = pixel_feat.clone()
+            
+            # Pixel stream: pixel_feat -> pixel_down_blocks -> pixel_down_mlp -> 32-dim
+            pixel_latent = pixel_feat
+            for block in self.pixel_down_blocks:
+                pixel_latent = block(pixel_latent)
+            pixel_latent = self.pixel_down_mlp(pixel_latent)  # (B, N, 32)
+            
+            # Store pixel_latent for pixel distillation loss
+            result_dict['pixel_latent'] = pixel_latent.clone()
+            
+            # Fusion: concat(semantic_latent, pixel_latent) -> fusion_layer -> 32-dim
+            fused_latent = torch.cat([semantic_latent, pixel_latent], dim=-1)  # (B, N, 64)
+            latent_for_decoder = self.fusion_layer(fused_latent)  # (B, N, 32)
+            
+        elif self.arch_type == "semantic_ae":
             # PS-VAE style encoding (without KL, reference: vlvae_intervl_semae.py)
             # f_h = vit_embeds (high-dimensional features from trainable encoder)
             f_h = vit_embeds  # (B, N, llm_hidden_size)

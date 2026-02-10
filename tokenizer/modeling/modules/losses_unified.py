@@ -172,14 +172,15 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             logvar_init = loss_config.get("logvar_init", 0.0)
             self.logvar = nn.Parameter(torch.ones(size=()) * logvar_init, requires_grad=False)
         
+        # Architecture type selection
+        self.arch_type = config.model.get("arch_type", "direct")
+        
         # Semantic AE config (PS-VAE, without KL)
         # Based on paper: https://arxiv.org/pdf/2512.17909
         # Reference: vlvae_intervl_semae.py (simplified version without KL)
-        self.use_semantic_ae = config.model.get("use_semantic_ae", False)
         self.semantic_recon_weight = loss_config.get("semantic_recon_weight", 1.0)
         
         # Dual stream config
-        self.use_dual_stream = config.model.get("use_dual_stream", False)
         self.pixel_distill_weight = loss_config.get("pixel_distill_weight", 0.0)
         
         # VF Loss config (for pixel stream structure preservation)
@@ -189,7 +190,8 @@ class ReconstructionLoss_Unified(torch.nn.Module):
         self.vf_cos_weight = loss_config.get("vf_cos_weight", 1.0)
         self.vf_distmat_margin = loss_config.get("vf_distmat_margin", 0.0)
         self.vf_cos_margin = loss_config.get("vf_cos_margin", 0.0)
-        self.use_vf_loss = self.use_dual_stream and self.vf_loss_weight > 0.0
+        # VF loss can be used with all dual stream architectures
+        self.use_vf_loss = (self.arch_type in ["dual_stream_trans", "dual_stream_simple", "dual_stream_pixeltrans"]) and self.vf_loss_weight > 0.0
         if self.use_vf_loss:
             print(f"VF Loss enabled with weight {self.vf_loss_weight}, "
                   f"distmat_weight={self.vf_distmat_weight}, cos_weight={self.vf_cos_weight}")
@@ -223,13 +225,13 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             semantic_l2_weight = loss_config.get("semantic_l2_weight", 1.0)
             semantic_cosine_weight = loss_config.get("semantic_cosine_weight", 0.5)
             
-            # Get DC-AE path for pixel distillation in dual-stream mode
-            dc_ae_path = config.model.get("dc_ae_path", None) if self.use_dual_stream else None
-            use_pixel_distill = self.use_dual_stream and self.pixel_distill_weight > 0.0
+            # Get DC-AE path for pixel distillation in dual-stream mode (all dual stream types)
+            dc_ae_path = config.model.get("dc_ae_path", None) if self.arch_type in ["dual_stream_trans", "dual_stream_simple", "dual_stream_pixeltrans"] else None
+            use_pixel_distill = (self.arch_type in ["dual_stream_trans", "dual_stream_simple", "dual_stream_pixeltrans"]) and self.pixel_distill_weight > 0.0
             
             self.distill_loss = DistillLoss(
                 distill_loss_path,
-                use_semantic_loss=self.use_semantic_ae,
+                use_semantic_loss=(self.arch_type == "semantic_ae"),
                 semantic_l2_weight=semantic_l2_weight,
                 semantic_cosine_weight=semantic_cosine_weight,
                 use_pixel_distill=use_pixel_distill,
@@ -243,7 +245,7 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 print(f"Layer-wise Adaptive Self-Distillation enabled (UniFlow style)")
                 print(f"  - Beta: {self.layerwise_beta}")
                 print(f"  - Layers: {self.layerwise_distill_layers if self.layerwise_distill_layers else 'all'}")
-            if self.use_semantic_ae:
+            if self.arch_type == "semantic_ae":
                 print(f"Semantic reconstruction loss enabled: recon_weight={self.semantic_recon_weight}, "
                       f"l2_weight={semantic_l2_weight}, cosine_weight={semantic_cosine_weight}")
             if use_pixel_distill:
@@ -439,7 +441,7 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 )
             
             # Adaptive weight for pixel distillation loss
-            if self.adaptive_pixel_distill_weight and self.use_dual_stream and self.pixel_distill_weight > 0.0:
+            if self.adaptive_pixel_distill_weight and (self.arch_type in ["dual_stream_trans", "dual_stream_simple", "dual_stream_pixeltrans"]) and self.pixel_distill_weight > 0.0:
                 if pixel_distill_loss.requires_grad:
                     adaptive_pixel_distill_w = self.calculate_adaptive_weight(
                         base_loss_for_adaptive, pixel_distill_loss, last_layer, self.pixel_distill_weight
@@ -469,11 +471,11 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 total_loss = total_loss + self.layerwise_distill_weight * layerwise_distill_loss
             
             # Add semantic AE loss if enabled (without KL)
-            if self.use_semantic_ae:
+            if self.arch_type == "semantic_ae":
                 total_loss = total_loss + self.semantic_recon_weight * semantic_recon_loss
             
             # Add pixel distillation loss if dual-stream is enabled
-            if self.use_dual_stream and self.pixel_distill_weight > 0.0:
+            if self.arch_type in ["dual_stream_trans", "dual_stream_simple", "dual_stream_pixeltrans"] and self.pixel_distill_weight > 0.0:
                 total_loss = total_loss + adaptive_pixel_distill_w * pixel_distill_loss
             
             # Add VF loss if enabled
@@ -510,7 +512,7 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                         loss_dict[k] = v
             
             # Add semantic AE loss to dict if enabled (without KL)
-            if self.use_semantic_ae:
+            if self.arch_type == "semantic_ae":
                 loss_dict["semantic_recon_loss"] = (self.semantic_recon_weight * semantic_recon_loss).detach()
                 # Add detailed semantic loss components
                 for k, v in semantic_loss_dict.items():
@@ -518,7 +520,7 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                         loss_dict[k] = v
             
             # Add pixel distillation loss to dict if dual-stream is enabled
-            if self.use_dual_stream and self.pixel_distill_weight > 0.0:
+            if self.arch_type in ["dual_stream_trans", "dual_stream_simple", "dual_stream_pixeltrans"] and self.pixel_distill_weight > 0.0:
                 loss_dict["pixel_distill_loss"] = (adaptive_pixel_distill_w * pixel_distill_loss).detach()
                 # Record adaptive weight only if enabled
                 if self.use_adaptive_weight and self.adaptive_pixel_distill_weight:
@@ -563,11 +565,11 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 total_loss = total_loss + self.layerwise_distill_weight * layerwise_distill_loss
             
             # Add semantic AE loss if enabled (without KL)
-            if self.use_semantic_ae:
+            if self.arch_type == "semantic_ae":
                 total_loss = total_loss + self.semantic_recon_weight * semantic_recon_loss
             
             # Add pixel distillation loss if dual-stream is enabled
-            if self.use_dual_stream and self.pixel_distill_weight > 0.0:
+            if self.arch_type in ["dual_stream_trans", "dual_stream_simple", "dual_stream_pixeltrans"] and self.pixel_distill_weight > 0.0:
                 total_loss = total_loss + adaptive_pixel_distill_w * pixel_distill_loss
             
             # Add VF loss if enabled
@@ -602,7 +604,7 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                         loss_dict[k] = v
             
             # Add semantic AE loss to dict if enabled (without KL)
-            if self.use_semantic_ae:
+            if self.arch_type == "semantic_ae":
                 loss_dict["semantic_recon_loss"] = (self.semantic_recon_weight * semantic_recon_loss).detach()
                 # Add detailed semantic loss components
                 for k, v in semantic_loss_dict.items():
@@ -610,7 +612,7 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                         loss_dict[k] = v
             
             # Add pixel distillation loss to dict if dual-stream is enabled
-            if self.use_dual_stream and self.pixel_distill_weight > 0.0:
+            if self.arch_type in ["dual_stream_trans", "dual_stream_simple", "dual_stream_pixeltrans"] and self.pixel_distill_weight > 0.0:
                 loss_dict["pixel_distill_loss"] = (adaptive_pixel_distill_w * pixel_distill_loss).detach()
                 # Record adaptive weight only if enabled
                 if self.use_adaptive_weight and self.adaptive_pixel_distill_weight:
