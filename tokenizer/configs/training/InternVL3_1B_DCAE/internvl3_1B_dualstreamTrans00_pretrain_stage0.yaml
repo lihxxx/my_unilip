@@ -1,6 +1,6 @@
 experiment:
     project: "unilip"
-    name: "16gpu_stage1_1b_dualstreamTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
+    name: "16gpu_stage0_1b_dualstreamTrans00x10_224E256_pretrain_GANnull_lr3e4W3k_100k"
     output_dir: "checkpoints/16gpu_stage1_1b_dualstreamTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
@@ -23,6 +23,7 @@ model:
     # Stage2 specific
     stage1_ckpt: ""
     freeze_encoder: True
+    freeze_decoder: True   # Stage0: freeze DC-AE decoder, only train dual-stream / fusion
     output_distill_feat: True
     disable_drop_path: False
     use_gradient_checkpoint: False
@@ -72,7 +73,7 @@ losses:
     
     # Pixel Distillation loss (for pixel stream alignment with frozen DC-AE encoder)
     # pixel_latent (32-dim) from pixel stream is compared with DC-AE encoder output
-    pixel_distill_weight: 0.0
+    pixel_distill_weight: 1.0
     
     # Pixel reconstruction loss
     reconstruction_loss: "l2"

@@ -687,7 +687,12 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
         if freeze_encoder:
             self.encoder.requires_grad_(False)
             self.mlp1.requires_grad_(False)
-        
+
+        # Freeze decoder (e.g. for stage0 when only training dual-stream / fusion)
+        freeze_decoder = self.config.model.get("freeze_decoder", False)
+        if freeze_decoder:
+            self.decoder.requires_grad_(False)
+
         # Print trainable parameters
         for name, param in self.named_parameters():
             if param.requires_grad:

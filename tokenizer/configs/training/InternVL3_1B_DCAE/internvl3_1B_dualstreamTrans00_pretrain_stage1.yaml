@@ -23,6 +23,7 @@ model:
     # Stage2 specific
     stage1_ckpt: ""
     freeze_encoder: True
+    freeze_decoder: False
     output_distill_feat: True
     disable_drop_path: False
     use_gradient_checkpoint: False
