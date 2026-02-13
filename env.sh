@@ -2,8 +2,8 @@
 source /mnt/tidal-alsh01/dataset/zeus/lihongxiang/network.sh
 
 # Install dependencies
-# conda create -n vgt python=3.10
-# conda activate vgt
+# conda create -n UniLIP python=3.10
+# conda activate UniLIP
 echo "卸载原有包库"
 pip freeze | xargs pip uninstall -y
 echo "卸载完毕"

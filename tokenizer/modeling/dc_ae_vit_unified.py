@@ -887,7 +887,8 @@ class DC_AE_ViT_Unified(BaseModel, PyTorchModelHubMixin):
                 semantic_feat, pixel_feat = self.cross_stream_attention(semantic_feat, pixel_feat)
             
             # Use semantic_feat for distillation loss (replaces vit_embeds)
-            distill_output = semantic_feat.clone()
+            # v2
+            # distill_output = semantic_feat.clone()
             
             # Store pixel_feat (before down) for pixel distillation if needed
             result_dict['pixel_feat'] = pixel_feat.clone()

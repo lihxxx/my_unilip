@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "16gpu_stage1_1b_dualstreamPixTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
-    output_dir: "checkpoints/16gpu_stage1_1b_dualstreamPixTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
+    name: "16gpu_stage1_1b_dualstreamTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
+    output_dir: "checkpoints/16gpu_stage1_1b_dualstreamTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
     eval_every: 10_000
@@ -33,7 +33,7 @@ model:
     #   - "dual_stream_simple": Dual stream with only down blocks (no transformers)
     #   - "semantic_ae": Semantic autoencoder (PS-VAE style)
     #   - "direct": Original direct projection design
-    arch_type: "dual_stream_pixeltrans"
+    arch_type: "dual_stream_trans"
     
     # Dual Stream Simple Architecture (Stage1)
     # Stream 1 (Semantic): vit_embeds -> semantic_down_blocks -> semantic_down_mlp -> 32-dim

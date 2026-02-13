@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "16gpu_stage1_1b_dualstreamPixTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
-    output_dir: "checkpoints/16gpu_stage1_1b_dualstreamPixTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
+    name: "16gpu_stage2_1b_dual_stream_simple10x01_224E256_pretrain_GAN30k_lr3e4x01E1e4W3k_100k"
+    output_dir: "checkpoints/16gpu_stage2_1b_dual_stream_simple10x01_224E256_pretrain_GAN30k_lr3e4x01E1e4W3k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
     eval_every: 10_000
@@ -21,8 +21,8 @@ model:
     mllm_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B"
     dc_ae_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers"
     # Stage2 specific
-    stage1_ckpt: ""
-    freeze_encoder: True
+    stage1_ckpt: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/16gpu_stage1_1b_dual_stream_simple00_224E256_pretrain_GANnull_lr3e4W3k_100k/checkpoint-100000/ema_model/pytorch_model.bin"
+    freeze_encoder: False
     output_distill_feat: True
     disable_drop_path: False
     use_gradient_checkpoint: False
@@ -33,7 +33,7 @@ model:
     #   - "dual_stream_simple": Dual stream with only down blocks (no transformers)
     #   - "semantic_ae": Semantic autoencoder (PS-VAE style)
     #   - "direct": Original direct projection design
-    arch_type: "dual_stream_pixeltrans"
+    arch_type: "dual_stream_simple"
     
     # Dual Stream Simple Architecture (Stage1)
     # Stream 1 (Semantic): vit_embeds -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
@@ -57,7 +57,7 @@ model:
 
 losses:
     name: ReconstructionLoss_Unified
-    discriminator_start: 20000_000
+    discriminator_start: 30_000
     quantizer_weight: 1.0
     discriminator_factor: 1.0
     discriminator_weight: 0.1
@@ -68,11 +68,11 @@ losses:
     # In dual_stream_simple mode: vit_embeds is used for distillation (no transformer processing)
     # This helps preserve semantic understanding capability
     distill_loss: /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B
-    distill_weight: 0.0
+    distill_weight: 1.0
     
     # Pixel Distillation loss (for pixel stream alignment with frozen DC-AE encoder)
     # pixel_latent (32-dim) from pixel stream is compared with DC-AE encoder output
-    pixel_distill_weight: 0.0
+    pixel_distill_weight: 0.1
     
     # Pixel reconstruction loss
     reconstruction_loss: "l2"
@@ -110,7 +110,7 @@ optimizer:
         beta1: 0.9
         beta2: 0.999
         weight_decay: 1e-4
-        use_encoder_lr_scale: False
+        use_encoder_lr_scale: True
         encoder_lr_scale: 0.1
 
 
