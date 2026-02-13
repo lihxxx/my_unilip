@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "16gpu_stage2_1b_dualstreamTrans10x01_224E256_pretrain_GAN30k_lr2e4x01E1e5W3k_100k"
-    output_dir: "checkpoints/16gpu_stage2_1b_dualstreamTrans10x01_224E256_pretrain_GAN30k_lr2e4x01E1e5W3k_100k"
+    name: "16gpu_stage2_1b_dualstreamTrans20x01_224E256_pretrain_GAN30k_lr2e4x01E1e5W3k_100k"
+    output_dir: "checkpoints/16gpu_stage2_1b_dualstreamTrans20x01_224E256_pretrain_GAN30k_lr2e4x01E1e5W3k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
     eval_every: 10_000
@@ -68,7 +68,7 @@ losses:
     # In dual_stream_simple mode: vit_embeds is used for distillation (no transformer processing)
     # This helps preserve semantic understanding capability
     distill_loss: /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B
-    distill_weight: 1.0
+    distill_weight: 2.0
     
     # Pixel Distillation loss (for pixel stream alignment with frozen DC-AE encoder)
     # pixel_latent (32-dim) from pixel stream is compared with DC-AE encoder output
