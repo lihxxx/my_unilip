@@ -1,0 +1,137 @@
+experiment:
+    project: "unilip"
+    name: "16gpu_stage1_1b_dualstreamTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
+    output_dir: "checkpoints/16gpu_stage1_1b_dualstreamTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
+    max_train_examples: 40_000_000
+    save_every: 10_000
+    eval_every: 10_000
+    eval_max_samples: -1            # 训练时只评估500条数据，设为-1表示全量评估
+    eval_resolution: 256            # 评估时将图像resize到此分辨率（默认256），设为-1或0则使用原始分辨率
+    generate_every: 5_000
+    log_every: 50
+    log_grad_norm_every: 500
+    resume: True
+    init_weight: ""
+
+
+model:
+    name: DC_AE_ViT_Unified
+    embed_dim: 32
+    patch_size: 14
+    mllm_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B"
+    dc_ae_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers"
+    # Stage2 specific
+    stage1_ckpt: ""
+    freeze_encoder: True
+    output_distill_feat: True
+    disable_drop_path: False
+    use_gradient_checkpoint: False
+    
+    # Architecture Type Selection
+    # Options:
+    #   - "dual_stream_trans": Dual stream with transformer encoders and cross-stream attention
+    #   - "dual_stream_simple": Dual stream with only down blocks (no transformers)
+    #   - "semantic_ae": Semantic autoencoder (PS-VAE style)
+    #   - "direct": Original direct projection design
+    arch_type: "dual_stream_trans"
+    
+    # Dual Stream Simple Architecture (Stage1)
+    # Stream 1 (Semantic): vit_embeds -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
+    # Stream 2 (Pixel): vit_embeds -> pixel_down_blocks -> pixel_down_mlp -> 32-dim
+    # Fusion: concat(32, 32) -> 64-dim -> fusion_layer -> 32-dim
+    # Note: No transformers or cross-stream attention in simple mode
+    
+    # dual_stream config is not used in dual_stream_simple mode
+    # (kept for reference only, will be ignored)
+    dual_stream:
+        num_layers: 3       # Number of transformer encoder layers for semantic stream
+        num_heads: 16       # Number of attention heads (2048 / 16 = 128 head_dim)
+        mlp_ratio: 4.0      # MLP expansion ratio
+        dropout: 0.0        # Dropout rate
+        use_cross_stream: False
+        cross_stream_num_heads: 16
+
+    vq_model:
+        quantize_mode: vae
+
+
+losses:
+    name: ReconstructionLoss_Unified
+    discriminator_start: 20000_000
+    quantizer_weight: 1.0
+    discriminator_factor: 1.0
+    discriminator_weight: 0.1
+    perceptual_loss: "lpips-convnext_s-1.0-0.1"
+    perceptual_weight: 1.1
+    
+    # Semantic Distillation loss (for feature alignment with frozen encoder)
+    # In dual_stream_simple mode: vit_embeds is used for distillation (no transformer processing)
+    # This helps preserve semantic understanding capability
+    distill_loss: /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B
+    distill_weight: 0.0
+    
+    # Pixel Distillation loss (for pixel stream alignment with frozen DC-AE encoder)
+    # pixel_latent (32-dim) from pixel stream is compared with DC-AE encoder output
+    pixel_distill_weight: 0.0
+    
+    # Pixel reconstruction loss
+    reconstruction_loss: "l2"
+    reconstruction_weight: 1.0
+    
+    # Other loss settings
+    lecam_regularization_weight: 0.001
+    kl_weight: 0.0
+    logvar_init: 0.0
+
+
+dataset:
+    params:
+        train_shards_path_or_url: ["/mnt/tidal-alsh01/dataset/zeus/lihongxiang/dataset/BLIP3o-Pretrain-Short-Caption/*.tar", "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/dataset/BLIP3o-Pretrain-Long-Caption/*.tar", "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/dataset/BLIP3o-Pretrain-JourneyDB/*.tar"]
+        sample_ratio: [0.2, 0.6, 0.2]
+        eval_shards_path_or_url: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/VGT/tokenizer/data/dataset/val/imagenet-val-{000000..000049}.tar"
+        num_workers_per_gpu: 12
+        dataset_with_class_label: False
+        dataset_with_text_label: True
+    preprocessing:
+        resize_shorter_edge: 224
+        crop_size: 224
+        random_crop: True
+        random_flip: True
+        normalize_mean: [0.485, 0.456, 0.406]
+        normalize_std: [0.229, 0.224, 0.225]
+        imagenet_norm: True
+
+
+optimizer:
+    name: adamw 
+    params:
+        learning_rate: 3e-4
+        discriminator_learning_rate: 3e-4
+        beta1: 0.9
+        beta2: 0.999
+        weight_decay: 1e-4
+        use_encoder_lr_scale: False
+        encoder_lr_scale: 0.1
+
+
+lr_scheduler:
+    scheduler: "cosine"
+    params:
+        learning_rate: ${optimizer.params.learning_rate}
+        warmup_steps: 3_000
+        end_lr: 1e-4
+
+
+training:
+    gradient_accumulation_steps: 1
+    per_gpu_batch_size: 32
+    mixed_precision: "bf16"
+    enable_tf32: True
+    enable_wandb: True
+    wandb_api_key: "3ed65eb52edcc37a5e278a82dd874b44d4ffadb7"
+    ddp_find_unused_parameters: False
+    use_ema: True
+    seed: 42
+    max_train_steps: 100_000
+    num_generated_images: 8
+    max_grad_norm: 1.0
