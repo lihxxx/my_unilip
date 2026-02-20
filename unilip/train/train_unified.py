@@ -128,6 +128,11 @@ class ModelArguments:
     # semantic_feat (经过cross stream) -> 对齐 vit_proj_features
     enable_semantic_distill: bool = field(default=False, metadata={"help": "是否启用Semantic Distill Loss (需要use_dual_stream=True)"})
     semantic_distill_weight: float = field(default=0.1, metadata={"help": "Semantic Distill Loss权重"})
+    
+    # Dynamic Token-Level Layer Routing 参数
+    enable_dynamic_routing: bool = field(default=False, metadata={"help": "启用词元级自适应层级路由，从LLM多层提取特征并动态融合"})
+    routing_num_layers: int = field(default=4, metadata={"help": "从LLM中均匀提取的层数"})
+    routing_temperature: float = field(default=1.0, metadata={"help": "路由softmax温度参数，越大越平滑"})
 
 
 @dataclass
@@ -1065,6 +1070,11 @@ def train(attn_implementation=None):
     # 保存Semantic Distill配置到模型config
     model.config.enable_semantic_distill = model_args.enable_semantic_distill
     model.config.semantic_distill_weight = model_args.semantic_distill_weight
+    
+    # 保存Dynamic Layer Routing配置到模型config
+    model.config.enable_dynamic_routing = model_args.enable_dynamic_routing
+    model.config.routing_num_layers = model_args.routing_num_layers
+    model.config.routing_temperature = model_args.routing_temperature
 
     # 计算参数
     total_params = sum(p.numel() for p in model.get_model().parameters())

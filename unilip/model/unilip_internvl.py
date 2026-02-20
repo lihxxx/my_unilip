@@ -25,6 +25,46 @@ def build_alignment_mlp(hidden_size, projector_dim, z_dim):
         nn.Linear(projector_dim, z_dim),
     )
 
+
+class DynamicTokenRouter(nn.Module):
+    """Token-Level Dynamic Layer Routing.
+    
+    Each token independently learns to weight features from different LLM layers
+    via a lightweight routing network, replacing the brute-force channel
+    concatenation used in approaches like SCB (DeepGen).
+    """
+
+    def __init__(self, hidden_size, num_selected_layers, temperature=1.0):
+        super().__init__()
+        self.num_selected_layers = num_selected_layers
+        self.temperature = temperature
+
+        self.router = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.SiLU(),
+            nn.Linear(hidden_size // 2, num_selected_layers),
+        )
+        self.layer_scales = nn.Parameter(torch.ones(num_selected_layers))
+        self.out_norm = nn.LayerNorm(hidden_size)
+        self.proj = nn.Linear(hidden_size, hidden_size)
+
+    def forward(self, selected_hiddens):
+        """
+        Args:
+            selected_hiddens: list of [B, N, D] tensors, length K.
+        Returns:
+            fused: [B, N, D]
+        """
+        stacked = torch.stack(selected_hiddens, dim=-2)          # [B, N, K, D]
+        scaled = stacked * self.layer_scales.view(1, 1, -1, 1)   # per-layer prior
+
+        query = selected_hiddens[-1]                              # deepest layer as query
+        logits = self.router(query) / self.temperature            # [B, N, K]
+        weights = F.softmax(logits, dim=-1).unsqueeze(-1)         # [B, N, K, 1]
+
+        fused = (scaled * weights).sum(dim=-2)                    # [B, N, D]
+        return self.proj(self.out_norm(fused))
+
 class UniLIP_InternVL_MetaModel:
 
     def __init__(self, config):
@@ -93,6 +133,20 @@ class UniLIP_InternVL_MetaModel:
             del self.llm_connector.layers[:-self.config.connect_layer]
             del self.llm_connector.embed_tokens
             self.projector = nn.Linear(llm_hidden_size, self.dit.config.caption_channels)
+
+            # Dynamic Token-Level Layer Routing
+            enable_dynamic_routing = getattr(config, 'enable_dynamic_routing', False)
+            if enable_dynamic_routing:
+                routing_num_layers = getattr(config, 'routing_num_layers', 4)
+                routing_temperature = getattr(config, 'routing_temperature', 1.0)
+                self.dynamic_router = DynamicTokenRouter(
+                    llm_hidden_size, routing_num_layers, routing_temperature
+                )
+                num_llm_layers = config.text_config.num_hidden_layers
+                step = max(1, num_llm_layers // routing_num_layers)
+                self.routing_layer_indices = [step * (i + 1) for i in range(routing_num_layers)]
+                self.routing_layer_indices[-1] = num_llm_layers
+                print(f"DynamicTokenRouter enabled: selecting layers {self.routing_layer_indices} from {num_llm_layers} LLM layers")
 
     def initialize_vision_modules(self, model_args, fsdp=None):
         unilip_path = model_args.unilip_path
@@ -245,12 +299,34 @@ class UniLIP_InternVL_MetaModel:
             print("latent_queries load from checkpoint!!!")
             self.latent_queries.requires_grad = True
         
+        # Dynamic Token-Level Layer Routing
+        enable_dynamic_routing = getattr(model_args, 'enable_dynamic_routing', False)
+        self.config.enable_dynamic_routing = enable_dynamic_routing
+        if enable_dynamic_routing:
+            routing_num_layers = getattr(model_args, 'routing_num_layers', 4)
+            routing_temperature = getattr(model_args, 'routing_temperature', 1.0)
+            self.config.routing_num_layers = routing_num_layers
+            self.config.routing_temperature = routing_temperature
+            num_llm_layers = self.config.text_config.num_hidden_layers
+            step = max(1, num_llm_layers // routing_num_layers)
+            self.routing_layer_indices = [step * (i + 1) for i in range(routing_num_layers)]
+            self.routing_layer_indices[-1] = num_llm_layers
+            if getattr(self, 'dynamic_router', None) is None:
+                print(f"Initializing DynamicTokenRouter: layers={self.routing_layer_indices}, temperature={routing_temperature}")
+                llm_hs = self.config.text_config.hidden_size
+                self.dynamic_router = DynamicTokenRouter(llm_hs, routing_num_layers, routing_temperature)
+            else:
+                print(f"DynamicTokenRouter loaded from checkpoint, layers={self.routing_layer_indices}")
+
         connect_require_grad = not self.fix_connect
         for p in self.llm_connector.parameters():
             p.requires_grad = connect_require_grad
         for p in self.projector.parameters():
             p.requires_grad = connect_require_grad
         self.latent_queries.requires_grad = connect_require_grad
+        if enable_dynamic_routing and hasattr(self, 'dynamic_router'):
+            for p in self.dynamic_router.parameters():
+                p.requires_grad = connect_require_grad
 
         # ========== Unified Distill Loss 初始化 ==========
         # 统一的蒸馏损失框架，包含两个子损失：
@@ -319,6 +395,18 @@ class UniLIP_InternVL_MetaModel:
         else:
             print(f"  [Semantic Distill Loss] Disabled")
     
+    def apply_dynamic_routing(self, all_hidden_states):
+        """Fuse multi-layer LLM features through the DynamicTokenRouter.
+
+        Args:
+            all_hidden_states: tuple of tensors from LLM output (index 0 is
+                the embedding layer, indices 1..L are transformer layer outputs).
+        Returns:
+            fused: [B, N, D] tensor of dynamically routed features.
+        """
+        selected = [all_hidden_states[i] for i in self.routing_layer_indices]
+        return self.dynamic_router(selected)
+
     def _register_dit_hook(self):
         """在DiT的指定transformer层注册forward hook来捕获中间特征"""
         if self._dit_hook_handle is not None:

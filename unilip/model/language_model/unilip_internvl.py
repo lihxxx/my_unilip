@@ -115,7 +115,12 @@ class UniLIP_InternVLForCausalLM(InternVLForConditionalGeneration, UniLIP_Intern
             use_cache=False
         )
         
-        hidden_states = outputs.hidden_states[-1]
+        # Dynamic Token-Level Layer Routing: fuse multi-layer features
+        use_routing = getattr(self.get_model().config, 'enable_dynamic_routing', False) and hasattr(self.get_model(), 'dynamic_router')
+        if use_routing:
+            hidden_states = self.get_model().apply_dynamic_routing(outputs.hidden_states)
+        else:
+            hidden_states = outputs.hidden_states[-1]
         logits = None
         
         total_loss = None
@@ -325,7 +330,11 @@ class UniLIP_InternVLForCausalLM(InternVLForConditionalGeneration, UniLIP_Intern
             return_dict=True,
         )
 
-        hidden_states = outputs.hidden_states[-1]
+        use_routing = getattr(self.get_model().config, 'enable_dynamic_routing', False) and hasattr(self.get_model(), 'dynamic_router')
+        if use_routing:
+            hidden_states = self.get_model().apply_dynamic_routing(outputs.hidden_states)
+        else:
+            hidden_states = outputs.hidden_states[-1]
         if pixel_values is not None:
             und_image_idx = torch.cat([und_image_idx, torch.zeros_like(latent_queries[:, :, 0]).bool()], dim=1)
             hidden_states[und_image_idx] = und_image_embeds.to(hidden_states.device).repeat(2,1,1).flatten(0,1)
