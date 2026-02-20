@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "16gpu_stage1Fstage0_1b_dualstreamTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
-    output_dir: "checkpoints/16gpu_stage1Fstage0_1b_dualstreamTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
+    name: "16gpu_stage1_1b_dual_stream_simple00_448E256_pretrain_GANnull_lr3e4W3k_100k"
+    output_dir: "checkpoints/16gpu_stage1_1b_dual_stream_simple00_448E256_pretrain_GANnull_lr3e4W3k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
     eval_every: 10_000
@@ -21,9 +21,8 @@ model:
     mllm_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B"
     dc_ae_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers"
     # Stage2 specific
-    stage1_ckpt: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/16gpu_stage0_1b_dualstreamTrans00x10_224E256_pretrain_GANnull_lr3e4W3k_100k/checkpoint-100000/ema_model/pytorch_model.bin"
+    stage1_ckpt: ""
     freeze_encoder: True
-    freeze_decoder: False
     output_distill_feat: True
     disable_drop_path: False
     use_gradient_checkpoint: False
@@ -34,7 +33,7 @@ model:
     #   - "dual_stream_simple": Dual stream with only down blocks (no transformers)
     #   - "semantic_ae": Semantic autoencoder (PS-VAE style)
     #   - "direct": Original direct projection design
-    arch_type: "dual_stream_trans"
+    arch_type: "dual_stream_simple"
     
     # Dual Stream Simple Architecture (Stage1)
     # Stream 1 (Semantic): vit_embeds -> semantic_down_blocks -> semantic_down_mlp -> 32-dim
@@ -49,7 +48,7 @@ model:
         num_heads: 16       # Number of attention heads (2048 / 16 = 128 head_dim)
         mlp_ratio: 4.0      # MLP expansion ratio
         dropout: 0.0        # Dropout rate
-        use_cross_stream: False
+        use_cross_stream: True
         cross_stream_num_heads: 16
 
     vq_model:

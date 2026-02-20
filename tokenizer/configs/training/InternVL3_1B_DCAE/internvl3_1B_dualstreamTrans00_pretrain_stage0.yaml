@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
     name: "16gpu_stage0_1b_dualstreamTrans00x10_224E256_pretrain_GANnull_lr3e4W3k_100k"
-    output_dir: "checkpoints/16gpu_stage1_1b_dualstreamTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
+    output_dir: "checkpoints/16gpu_stage0_1b_dualstreamTrans00x10_224E256_pretrain_GANnull_lr3e4W3k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
     eval_every: 10_000

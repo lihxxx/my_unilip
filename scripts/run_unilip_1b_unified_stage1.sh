@@ -44,7 +44,7 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --bf16 True \
     --output_dir ${OUTPUT_FOLDER} \
     --num_train_epochs 5 \
-    --per_device_train_batch_size 32 \
+    --per_device_train_batch_size 128 \
     --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 1 \
     --eval_strategy "no" \
