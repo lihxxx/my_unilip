@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "16gpu_stage0_1b_dualstreamPixTrans616_00x10_224E256_pretrain_GANnull_lr3e4W10k_200k"
-    output_dir: "checkpoints/16gpu_stage0_1b_dualstreamPixTrans616_00x10_224E256_pretrain_GANnull_lr3e4W10k_200k"
+    name: "16gpu_stage0_1b_dualstreamPixTrans616_00x10_224E256_pretrain_GANnull_lr3e4W10k_100k"
+    output_dir: "checkpoints/16gpu_stage0_1b_dualstreamPixTrans616_00x10_224E256_pretrain_GANnull_lr3e4W10k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
     eval_every: 10_000
@@ -133,6 +133,6 @@ training:
     ddp_find_unused_parameters: False
     use_ema: True
     seed: 42
-    max_train_steps: 200_000
+    max_train_steps: 100_000
     num_generated_images: 8
     max_grad_norm: 1.0

@@ -138,7 +138,7 @@ def main(opt):
     pipe = CustomEditPipeline(multimodal_encoder=multi_model, tokenizer=tokenizer, image_processor=image_processor)
 
     # Load all prompts
-    json_dir = '../../data/ImgEdit/Benchmark/singleturn'
+    json_dir = '/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/data/ImgEdit/Benchmark/singleturn'
     json_name = 'singleturn.json'
     json_abs_path = os.path.join(json_dir, json_name)
     with open(json_abs_path) as fp:

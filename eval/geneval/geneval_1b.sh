@@ -3,7 +3,7 @@
 
 
 
-MODEL="/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/results/unilip_intern_vl_1b_sft_alignment_distill05_D6/checkpoint-2385"
+MODEL="/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/results/unilip_intern_vl_1b_sft_alignment_distill05_D6_dynamic6/checkpoint-2385"
 CLS_NAME="UniLIP_InternVLForCausalLM"
 
 

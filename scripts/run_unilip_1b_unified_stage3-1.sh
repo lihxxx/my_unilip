@@ -16,7 +16,7 @@ export EDIT_IMG_FOLDER="${BASE_DIR}/data/edit_sft"
 unset WANDB_DISABLED
 export WANDB_API_KEY="3ed65eb52edcc37a5e278a82dd874b44d4ffadb7"
 export WANDB_PROJECT="unilip_umm"
-export WANDB_NAME="unilip_intern_vl_1b_sft_alignment_distill05_D6"
+export WANDB_NAME="unilip_intern_vl_1b_sft_alignment_distill05_D6_dynamic6"
 export OUTPUT_FOLDER="${BASE_DIR}/results/${WANDB_NAME}"
 
 # ============== Unified Distill Loss 配置 ==============

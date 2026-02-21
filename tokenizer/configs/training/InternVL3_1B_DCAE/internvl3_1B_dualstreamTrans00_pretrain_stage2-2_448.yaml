@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "16gpu_stage2Fstage1_1b_dualstreamTrans10x00_224E256_pretrain_GAN30k_lr3e4x01E1e4W10k_100k"
-    output_dir: "checkpoints/16gpu_stage2Fstage1_1b_dualstreamTrans10x00_224E256_pretrain_GAN30k_lr3e4x01E1e4W10k_100k"
+    name: "64gpuGCFalse_stage2Fstage2_1b_dualstreamTrans10x00_448E256_pretrain_GAN00k_lr3e4x01E1e4W10k_100k"
+    output_dir: "checkpoints/64gpuGCFalse_stage2Fstage2_1b_dualstreamTrans10x00_448E256_pretrain_GAN00k_lr3e4x01E1e4W10k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
     eval_every: 10_000
@@ -21,7 +21,7 @@ model:
     mllm_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B"
     dc_ae_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers"
     # Stage2 specific
-    stage1_ckpt: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/16gpu_stage1Fstage0_1b_dualstreamTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k/checkpoint-100000/ema_model/pytorch_model.bin"
+    stage1_ckpt: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/64gpu_stage2Fstage1_1b_dualstreamTrans10x00_224E256_pretrain_GAN30k_lr3e4x01E1e4W10k_100k/checkpoint-80000/ema_model/pytorch_model.bin"
     freeze_encoder: False
     freeze_decoder: False
     output_distill_feat: True
@@ -58,7 +58,7 @@ model:
 
 losses:
     name: ReconstructionLoss_Unified
-    discriminator_start: 30_000
+    discriminator_start: 00_000
     quantizer_weight: 1.0
     discriminator_factor: 1.0
     discriminator_weight: 0.1
@@ -94,8 +94,8 @@ dataset:
         dataset_with_class_label: False
         dataset_with_text_label: True
     preprocessing:
-        resize_shorter_edge: 224
-        crop_size: 224
+        resize_shorter_edge: 448
+        crop_size: 448
         random_crop: True
         random_flip: True
         normalize_mean: [0.485, 0.456, 0.406]
@@ -125,7 +125,7 @@ lr_scheduler:
 
 training:
     gradient_accumulation_steps: 1
-    per_gpu_batch_size: 32
+    per_gpu_batch_size: 8
     mixed_precision: "bf16"
     enable_tf32: True
     enable_wandb: True
@@ -133,6 +133,6 @@ training:
     ddp_find_unused_parameters: False
     use_ema: True
     seed: 42
-    max_train_steps: 200_000
+    max_train_steps: 100_000
     num_generated_images: 8
     max_grad_norm: 1.0
