@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "16gpu_stage1_1b_dualstreamPixTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
-    output_dir: "checkpoints/16gpu_stage1_1b_dualstreamPixTrans00_224E256_pretrain_GANnull_lr3e4W3k_100k"
+    name: "32gpu_stage1Fstage0_1b_dualstreamPixTrans616_00_224E256_pretrain_GANnull_lr3e4W10k_100k"
+    output_dir: "checkpoints/32gpu_stage1Fstage0_1b_dualstreamPixTrans616_00_224E256_pretrain_GANnull_lr3e4W10k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
     eval_every: 10_000
@@ -21,8 +21,9 @@ model:
     mllm_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B"
     dc_ae_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers"
     # Stage2 specific
-    stage1_ckpt: ""
+    stage1_ckpt: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/16gpu_stage0_1b_dualstreamPixTrans616_00x10_224E256_pretrain_GANnull_lr3e4W10k_200k/checkpoint-130000/ema_model/pytorch_model.bin"
     freeze_encoder: True
+    freeze_decoder: False
     output_distill_feat: True
     disable_drop_path: False
     use_gradient_checkpoint: False
@@ -44,7 +45,7 @@ model:
     # dual_stream config is not used in dual_stream_simple mode
     # (kept for reference only, will be ignored)
     dual_stream:
-        num_layers: 3       # Number of transformer encoder layers for semantic stream
+        num_layers: 6       # Number of transformer encoder layers for semantic stream
         num_heads: 16       # Number of attention heads (2048 / 16 = 128 head_dim)
         mlp_ratio: 4.0      # MLP expansion ratio
         dropout: 0.0        # Dropout rate
@@ -118,7 +119,7 @@ lr_scheduler:
     scheduler: "cosine"
     params:
         learning_rate: ${optimizer.params.learning_rate}
-        warmup_steps: 3_000
+        warmup_steps: 10_000
         end_lr: 1e-4
 
 

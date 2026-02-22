@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "64gpuGCFalse_stage2Fstage2_1b_dualstreamTrans10x00_448E256_pretrain_GAN00k_lr3e4x01E1e4W10k_100k"
-    output_dir: "checkpoints/64gpuGCFalse_stage2Fstage2_1b_dualstreamTrans10x00_448E256_pretrain_GAN00k_lr3e4x01E1e4W10k_100k"
+    name: "32gpuGCTrue_stage2Fstage2_1b_dualstreamTrans10x00_448E256_pretrain_GAN00k_lr3e4x01E1e4W10k_100k"
+    output_dir: "checkpoints/32gpuGCTrue_stage2Fstage2_1b_dualstreamTrans10x00_448E256_pretrain_GAN00k_lr3e4x01E1e4W10k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
     eval_every: 10_000
@@ -26,7 +26,7 @@ model:
     freeze_decoder: False
     output_distill_feat: True
     disable_drop_path: False
-    use_gradient_checkpoint: False
+    use_gradient_checkpoint: True
     
     # Architecture Type Selection
     # Options:
@@ -125,7 +125,7 @@ lr_scheduler:
 
 training:
     gradient_accumulation_steps: 1
-    per_gpu_batch_size: 8
+    per_gpu_batch_size: 16
     mixed_precision: "bf16"
     enable_tf32: True
     enable_wandb: True

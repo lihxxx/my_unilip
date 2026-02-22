@@ -1,6 +1,6 @@
 experiment:
     project: "unilip"
-    name: "32gpuGCFalse_stage2Fstage2_1b_dualstreamTrans10x00_448E256_pretrain_GAN30k_lr2e4x01E1e5W3k_100k"
+    name: "32gpuGCTrue_stage2Fstage2_1b_dualstreamTrans10x00_448E256_pretrain_GAN30k_lr2e4x01E1e5W3k_100k"
     output_dir: "checkpoints/32gpuGCFalse_stage2Fstage2_1b_dualstreamTrans10x00_448E256_pretrain_GAN30k_lr2e4x01E1e5W3k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
@@ -26,7 +26,7 @@ model:
     freeze_decoder: False
     output_distill_feat: True
     disable_drop_path: False
-    use_gradient_checkpoint: False
+    use_gradient_checkpoint: True
     
     # Architecture Type Selection
     # Options:
