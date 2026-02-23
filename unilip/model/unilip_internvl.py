@@ -113,12 +113,10 @@ class UniLIP_InternVL_MetaModel:
             dual_stream_config = None
             if use_dual_stream:
                 dual_stream_config = {
-                    'num_layers': getattr(config, 'dual_stream_num_layers', 3),
+                    'num_layers': getattr(config, 'dual_stream_num_layers', 6),
                     'num_heads': getattr(config, 'dual_stream_num_heads', 16),
                     'mlp_ratio': getattr(config, 'dual_stream_mlp_ratio', 4.0),
                     'dropout': getattr(config, 'dual_stream_dropout', 0.0),
-                    'use_cross_stream': getattr(config, 'use_cross_stream', False),
-                    'cross_stream_num_heads': getattr(config, 'cross_stream_num_heads', 16),
                 }
             self.vae_decoder = DCAE_Decoder(vae_config, llm_hidden_size, use_dual_stream, dual_stream_config)
 
@@ -214,12 +212,10 @@ class UniLIP_InternVL_MetaModel:
             dual_stream_config = None
             if use_dual_stream:
                 dual_stream_config = {
-                    'num_layers': getattr(model_args, 'dual_stream_num_layers', 3),
+                    'num_layers': getattr(model_args, 'dual_stream_num_layers', 6),
                     'num_heads': getattr(model_args, 'dual_stream_num_heads', 16),
                     'mlp_ratio': getattr(model_args, 'dual_stream_mlp_ratio', 4.0),
                     'dropout': getattr(model_args, 'dual_stream_dropout', 0.0),
-                    'use_cross_stream': getattr(model_args, 'use_cross_stream', False),
-                    'cross_stream_num_heads': getattr(model_args, 'cross_stream_num_heads', 16),
                 }
             self.vae_decoder = DCAE_Decoder(vae_config, llm_hidden_size, use_dual_stream, dual_stream_config)
             
@@ -231,9 +227,8 @@ class UniLIP_InternVL_MetaModel:
                 # Include decoder and down-related keys
                 if 'decoder' in name or 'down' in name:
                     decoder_ckpt[name] = value
-                # For dual stream, also include semantic, pixel, fusion, and cross_stream related keys
                 if use_dual_stream:
-                    if any(key in name for key in ['semantic', 'pixel', 'fusion', 'cross_stream']):
+                    if any(key in name for key in ['semantic', 'pixel', 'fusion']):
                         decoder_ckpt[name] = value
             msg = self.vae_decoder.load_state_dict(decoder_ckpt, strict=False)
             for p in self.vae_decoder.parameters():
@@ -328,72 +323,41 @@ class UniLIP_InternVL_MetaModel:
             for p in self.dynamic_router.parameters():
                 p.requires_grad = connect_require_grad
 
-        # ========== Unified Distill Loss 初始化 ==========
-        # 统一的蒸馏损失框架，包含两个子损失：
-        # 1. Alignment Loss: DiT中间层 -> projector -> 对齐 vit_proj_features
-        # 2. Semantic Distill Loss: semantic_feat (经过cross stream) -> 对齐 vit_proj_features
-        # 两者使用相同的目标特征：vit_proj_features（经过pixel_shuffle + mlp1）
-        
-        self.enable_alignment_loss = getattr(model_args, 'enable_repa', False)  # 兼容旧参数名
+        # ========== Alignment Distill Loss 初始化 ==========
+        self.enable_alignment_loss = getattr(model_args, 'enable_repa', False)
         self.alignment_loss_weight = getattr(model_args, 'repa_loss_weight', 0.5)
         self.alignment_encoder_depth = getattr(model_args, 'repa_encoder_depth', 6)
         alignment_projector_dim = getattr(model_args, 'repa_projector_dim', 2048)
         
-        self.enable_semantic_distill = getattr(model_args, 'enable_semantic_distill', False)
-        self.semantic_distill_weight = getattr(model_args, 'semantic_distill_weight', 0.1)
-        
-        # 存储hook捕获的特征
         self._dit_intermediate_features = None
         self._dit_hook_handle = None
         
-        # 获取投影后的特征维度（经过mlp1后的维度）
         proj_hidden_size = self.multi_modal_projector[-1].weight.shape[-1]
         
-        print(f"=== Initializing Unified Distill Loss ===")
-        print(f"  Target feature: vit_proj_features (after pixel_shuffle + mlp1, dim={proj_hidden_size})")
-        
-        # Alignment Distill Loss 初始化
         if self.enable_alignment_loss:
-            print(f"  [Alignment Distill Loss] Enabled")
-            print(f"    - Weight: {self.alignment_loss_weight}")
-            print(f"    - DiT layer depth: {self.alignment_encoder_depth}")
+            print(f"=== Alignment Distill Loss ===")
+            print(f"  Weight: {self.alignment_loss_weight}, DiT layer: {self.alignment_encoder_depth}")
             
-            # 获取DiT transformer blocks的内部隐藏维度
             dit_config = self.dit.config
             if hasattr(dit_config, 'num_attention_heads') and hasattr(dit_config, 'attention_head_dim'):
                 dit_hidden_size = dit_config.num_attention_heads * dit_config.attention_head_dim
             else:
                 dit_hidden_size = self.dit.transformer_blocks[0].attn1.to_q.in_features
             
-            # 创建对齐投影头：DiT中间层特征 -> 投影特征空间
             self.alignment_projector = build_alignment_mlp(
                 dit_hidden_size, 
                 alignment_projector_dim, 
                 proj_hidden_size
             )
-            print(f"    - Projector: DiT({dit_hidden_size}) -> {alignment_projector_dim} -> Proj({proj_hidden_size})")
+            print(f"  Projector: DiT({dit_hidden_size}) -> {alignment_projector_dim} -> Proj({proj_hidden_size})")
             
             for p in self.alignment_projector.parameters():
                 p.requires_grad = True
             
-            # 注册hook到DiT的指定层
             self._register_dit_hook()
         else:
             self.alignment_projector = None
-            print(f"  [Alignment Distill Loss] Disabled")
-        
-        # Semantic Distill Loss 初始化
-        if self.enable_semantic_distill:
-            use_dual_stream = getattr(model_args, 'use_dual_stream', False)
-            if not use_dual_stream:
-                print(f"  [Semantic Distill Loss] Disabled (requires use_dual_stream=True)")
-                self.enable_semantic_distill = False
-            else:
-                print(f"  [Semantic Distill Loss] Enabled")
-                print(f"    - Weight: {self.semantic_distill_weight}")
-                print(f"    - Aligns semantic_feat (after cross-stream) with vit_proj_features")
-        else:
-            print(f"  [Semantic Distill Loss] Disabled")
+            print(f"Alignment Distill Loss: Disabled")
     
     def apply_dynamic_routing(self, all_hidden_states):
         """Fuse multi-layer LLM features through the DynamicTokenRouter.
@@ -524,52 +488,6 @@ class UniLIP_InternVL_MetaModel:
         """清除存储的中间特征"""
         self._dit_intermediate_features = None
 
-    # ========== Semantic Distill Loss ==========
-    def get_semantic_features_for_distill(self, vit_embeds):
-        """
-        获取经过cross stream attention后的semantic_feat用于语义蒸馏损失
-        
-        Args:
-            vit_embeds: (B, N, llm_hidden_size) 来自vision encoder + projector的特征
-        Returns:
-            semantic_feat: (B, N, llm_hidden_size) 经过cross stream后的语义特征
-        """
-        if not hasattr(self, 'vae_decoder') or self.vae_decoder is None:
-            raise ValueError("vae_decoder is not initialized")
-        
-        if not self.vae_decoder.use_dual_stream:
-            raise ValueError("Semantic distill loss requires use_dual_stream=True")
-        
-        return self.vae_decoder.get_semantic_features_with_cross_stream(vit_embeds)
-    
-    def compute_semantic_distill_loss(self, semantic_feat, vit_proj_features):
-        """
-        计算语义蒸馏损失：semantic_feat vs vision encoder投影特征
-        
-        与tokenizer训练时的distill_loss保持一致：
-        - vit_proj_features: 经过pixel_shuffle + mlp1的特征
-        - semantic_feat: 经过dual stream的semantic_transformer + cross_stream的特征
-        
-        Args:
-            semantic_feat: (B, N, D) 经过cross stream后的语义特征
-            vit_proj_features: (B, N, D) vision encoder的投影特征（经过pixel_shuffle + mlp1）
-        Returns:
-            semantic_distill_loss: MSE损失值
-        """
-        # 确保序列长度一致
-        N_sem = semantic_feat.shape[1]
-        N_vit = vit_proj_features.shape[1]
-        
-        if N_sem != N_vit:
-            # 使用adaptive average pooling对齐长度
-            vit_proj_features = vit_proj_features.permute(0, 2, 1)  # [B, D, N_vit]
-            vit_proj_features = F.adaptive_avg_pool1d(vit_proj_features, N_sem)
-            vit_proj_features = vit_proj_features.permute(0, 2, 1)  # [B, N_sem, D]
-        
-        # MSE损失
-        semantic_distill_loss = F.mse_loss(semantic_feat, vit_proj_features)
-        
-        return semantic_distill_loss
 
 
 class UniLIP_InternVL_MetaForCausalLM(ABC):

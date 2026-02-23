@@ -28,10 +28,6 @@ ENABLE_ALIGNMENT=True
 ALIGNMENT_LOSS_WEIGHT=0.5
 ALIGNMENT_ENCODER_DEPTH=6
 
-# Semantic Distill Loss：semantic_feat (经过cross stream) -> 对齐 vit_proj_features
-ENABLE_SEMANTIC_DISTILL=False
-SEMANTIC_DISTILL_WEIGHT=0.1
-
 # Vision Encoder 设置
 UNFREEZE_VISION_ENCODER=False
 
@@ -64,7 +60,7 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --bf16 True \
     --output_dir ${OUTPUT_FOLDER} \
     --num_train_epochs 5 \
-    --per_device_train_batch_size 32 \
+    --per_device_train_batch_size 128 \
     --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 1 \
     --eval_strategy "no" \
@@ -93,12 +89,11 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --repa_loss_weight ${ALIGNMENT_LOSS_WEIGHT} \
     --repa_encoder_depth ${ALIGNMENT_ENCODER_DEPTH} \
     --unfreeze_vision_encoder ${UNFREEZE_VISION_ENCODER} \
-    --use_dual_stream False \
-    --dual_stream_num_layers 3 \
+    --use_dual_stream True \
+    --dual_stream_num_layers 6 \
     --dual_stream_num_heads 16 \
     --dual_stream_mlp_ratio 4.0 \
     --dual_stream_dropout 0.0 \
-    --use_cross_stream False \
-    --cross_stream_num_heads 16 \
-    --enable_semantic_distill ${ENABLE_SEMANTIC_DISTILL} \
-    --semantic_distill_weight ${SEMANTIC_DISTILL_WEIGHT}
+    --enable_dynamic_routing True \
+    --routing_num_layers 4 \
+    --routing_temperature 1.0

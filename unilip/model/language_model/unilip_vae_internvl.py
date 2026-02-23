@@ -113,7 +113,12 @@ class UniLIP_VAE_InternVLForCausalLM(InternVLForConditionalGeneration, UniLIP_VA
             use_cache=False
         )
         
-        hidden_states = outputs.hidden_states[-1]
+        # Dynamic Token-Level Layer Routing
+        use_routing = getattr(self.get_model().config, 'enable_dynamic_routing', False) and hasattr(self.get_model(), 'dynamic_router')
+        if use_routing:
+            hidden_states = self.get_model().apply_dynamic_routing(outputs.hidden_states)
+        else:
+            hidden_states = outputs.hidden_states[-1]
         logits = None
         
         total_loss = None
@@ -255,7 +260,11 @@ class UniLIP_VAE_InternVLForCausalLM(InternVLForConditionalGeneration, UniLIP_VA
             return_dict=True,
         )
 
-        hidden_states = outputs.hidden_states[-1]
+        use_routing = getattr(self.get_model().config, 'enable_dynamic_routing', False) and hasattr(self.get_model(), 'dynamic_router')
+        if use_routing:
+            hidden_states = self.get_model().apply_dynamic_routing(outputs.hidden_states)
+        else:
+            hidden_states = outputs.hidden_states[-1]
         attention_mask = attention_mask.bool()
         bidr_attention_mask = attention_mask.unsqueeze(2) & attention_mask.unsqueeze(1)
         bidr_attention_mask = bidr_attention_mask.unsqueeze(1)

@@ -133,14 +133,11 @@ class UniLIP_InternVLForCausalLM(InternVLForConditionalGeneration, UniLIP_Intern
             if und_image_embeds is not None:
                 hidden_states[und_img_idx] = und_image_embeds.to(hidden_states.device).flatten(0,1)
             
-            # ========== Unified Distill Loss: 提取目标特征 ==========
-            # Alignment Loss 和 Semantic Distill Loss 使用相同的目标特征
+            # ========== Alignment Distill Loss: 提取目标特征 ==========
             enable_alignment = getattr(self.get_model(), 'enable_alignment_loss', False)
-            enable_semantic_distill = getattr(self.get_model(), 'enable_semantic_distill', False)
             
-            # 提取投影特征（经过pixel_shuffle + mlp1），作为两个loss的共同目标
             vit_proj_features = None
-            if (enable_alignment or enable_semantic_distill) and gen_image is not None:
+            if enable_alignment and gen_image is not None:
                 vit_proj_features = self.get_model().extract_vit_proj_features(gen_image)
                 self.get_model().clear_dit_intermediate_features()
             
@@ -158,7 +155,6 @@ class UniLIP_InternVLForCausalLM(InternVLForConditionalGeneration, UniLIP_Intern
             if latents is None:
                 img_loss = img_loss_funct(img_hidden_states, torch.clone(img_hidden_states.detach()))
                 weighted_alignment_loss = 0.0
-                weighted_semantic_distill_loss = 0.0
             else:
                 bsz = latents.shape[0]
                 dtype = latents.dtype
@@ -169,7 +165,6 @@ class UniLIP_InternVLForCausalLM(InternVLForConditionalGeneration, UniLIP_Intern
                 sigmas = self.get_sigmas(timesteps, latents.device, n_dim=latents.ndim, dtype=dtype)
                 noisy_latents = (1.0 - sigmas) * latents + sigmas * noise
                 
-                # DiT forward - hook会自动捕获中间层特征
                 noise_pred = self.get_model().dit(
                     noisy_latents,
                     timestep=timesteps,
@@ -181,14 +176,12 @@ class UniLIP_InternVLForCausalLM(InternVLForConditionalGeneration, UniLIP_Intern
 
                 img_loss = F.mse_loss(noise_pred.float(), target.float(), reduction="mean")
                 
-                # ========== Alignment Distill Loss: DiT中间层对齐 (负余弦相似度) ==========
+                # ========== Alignment Distill Loss ==========
                 if enable_alignment and vit_proj_features is not None:
                     dit_intermediate = self.get_model().get_dit_intermediate_features()
                     
                     if dit_intermediate is not None:
-                        # DiT中间层特征 -> alignment_projector -> 对齐 vit_proj_features
                         dit_projected = self.get_model().alignment_projector(dit_intermediate)
-                        
                         alignment_loss = self.get_model().compute_alignment_loss(dit_projected, vit_proj_features)
                         alignment_loss_weight = getattr(self.get_model(), 'alignment_loss_weight', 0.5)
                         weighted_alignment_loss = alignment_loss_weight * alignment_loss
@@ -198,36 +191,9 @@ class UniLIP_InternVLForCausalLM(InternVLForConditionalGeneration, UniLIP_Intern
                         weighted_alignment_loss = 0.0
                 else:
                     weighted_alignment_loss = 0.0
-                
-                # ========== Semantic Distill: 计算semantic_feat与Vision Encoder的对齐损失 ==========
-                # semantic_feat是经过cross stream attention后的特征
-                # 与tokenizer训练时的distill_loss保持一致：使用经过pixel_shuffle + mlp1的特征
-                if enable_semantic_distill and vit_proj_features is not None:
-                    try:
-                        # vit_proj_features已经是经过pixel_shuffle + mlp1的特征
-                        # 这与vae_decoder的输入格式一致，可以直接用于获取semantic_feat
-                        
-                        # 获取经过cross stream后的semantic_feat
-                        semantic_feat = self.get_model().get_semantic_features_for_distill(vit_proj_features)
-                        
-                        # 计算semantic distill loss（MSE损失）
-                        # vit_proj_features是frozen encoder的投影特征（经过pixel_shuffle + mlp1）
-                        # semantic_feat是经过dual stream decoder的cross stream attention后的特征
-                        # 这与tokenizer训练时的distill_loss计算方式一致
-                        semantic_distill_loss = self.get_model().compute_semantic_distill_loss(
-                            semantic_feat, vit_proj_features
-                        )
-                        semantic_distill_weight = getattr(self.get_model(), 'semantic_distill_weight', 0.1)
-                        weighted_semantic_distill_loss = semantic_distill_weight * semantic_distill_loss
-                        print(f"semantic distill loss {semantic_distill_loss.item():.4f} (weighted: {weighted_semantic_distill_loss.item():.4f})")
-                    except Exception as e:
-                        print(f"Warning: Semantic distill loss computation failed: {e}")
-                        weighted_semantic_distill_loss = 0.0
-                else:
-                    weighted_semantic_distill_loss = 0.0
 
             print(f"img loss {img_loss}")
-            total_loss = img_loss + weighted_alignment_loss + weighted_semantic_distill_loss
+            total_loss = img_loss + weighted_alignment_loss
 
         return CausalLMOutputWithPast(
             loss=total_loss,

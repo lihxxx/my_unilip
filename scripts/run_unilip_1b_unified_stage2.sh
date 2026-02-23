@@ -5,21 +5,28 @@
 #
 
 # ============== 路径配置（请根据实际情况修改）==============
+export BASE_DIR="/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip"
+export MODEL_DIR="/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models"
+
 # 数据路径支持多个目录，用逗号分隔
-export BASE_DIR="../"
-export OUTPUT_FOLDER="${BASE_DIR}/work_dirs/1b_unified_stage2"
 export GEN_IMG_FOLDER="${BASE_DIR}/data/BLIP3o-Pretrain-Long-Caption,${BASE_DIR}/data/BLIP3o-Pretrain-Short-Caption,${BASE_DIR}/data/BLIP3o-Pretrain-JourneyDB"
 export EDIT_IMG_FOLDER="${BASE_DIR}/data/GPT-Edit"
 
 # Stage1的checkpoint路径（请修改为实际路径）
-export STAGE1_CKPT="${BASE_DIR}/work_dirs/1b_unified_stage1/checkpoint-xxx"
+export STAGE1_CKPT="${BASE_DIR}/results/unilip_intern_vl_1b_stage1/checkpoint-xxx"
 
 # ============== WandB配置 ==============
 unset WANDB_DISABLED
 export WANDB_API_KEY="3ed65eb52edcc37a5e278a82dd874b44d4ffadb7"
 export WANDB_PROJECT="unilip_umm"
-export WANDB_NAME="unilip_intern_vl_1b_sft_unified_distill"
+export WANDB_NAME="unilip_intern_vl_1b_stage2"
 export OUTPUT_FOLDER="${BASE_DIR}/results/${WANDB_NAME}"
+
+# ============== Alignment Distill Loss 配置 ==============
+ENABLE_ALIGNMENT=True
+ALIGNMENT_LOSS_WEIGHT=0.5
+ALIGNMENT_ENCODER_DEPTH=6
+UNFREEZE_VISION_ENCODER=False
 
 # ============== 训练命令 ==============
 # 单节点训练
@@ -31,7 +38,7 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --deepspeed ${BASE_DIR}/deepspeed_scripts/zero0.json \
     --model_name_or_path ${STAGE1_CKPT} \
     --use_vae_model False \
-    --unilip_path ${BASE_DIR}/tokenizer_ckpt/1b_unilip.pth \
+    --unilip_path ${MODEL_DIR}/UniLIP/1b_unilip.pth \
     --unilip_factor 10.6 \
     --mllm_path ${MODEL_DIR}/InternVL3-1B \
     --mllm_hf_path ${MODEL_DIR}/InternVL3-1B-hf \
@@ -50,7 +57,7 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --bf16 True \
     --output_dir ${OUTPUT_FOLDER} \
     --num_train_epochs 5 \
-    --per_device_train_batch_size 32 \
+    --per_device_train_batch_size 128 \
     --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 1 \
     --eval_strategy "no" \
@@ -70,8 +77,20 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --lazy_preprocess True \
     --n_query 256 \
     --n_und_query 0 \
-    --report_to none \
-    --run_name unilip_1b_stage2 \
+    --report_to wandb \
+    --run_name ${WANDB_NAME} \
     --fix_dit False \
     --fix_connect False \
-    --fix_llm True
+    --fix_llm True \
+    --enable_repa ${ENABLE_ALIGNMENT} \
+    --repa_loss_weight ${ALIGNMENT_LOSS_WEIGHT} \
+    --repa_encoder_depth ${ALIGNMENT_ENCODER_DEPTH} \
+    --unfreeze_vision_encoder ${UNFREEZE_VISION_ENCODER} \
+    --use_dual_stream True \
+    --dual_stream_num_layers 6 \
+    --dual_stream_num_heads 16 \
+    --dual_stream_mlp_ratio 4.0 \
+    --dual_stream_dropout 0.0 \
+    --enable_dynamic_routing True \
+    --routing_num_layers 4 \
+    --routing_temperature 1.0

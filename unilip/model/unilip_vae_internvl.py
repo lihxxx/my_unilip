@@ -13,6 +13,7 @@ from .vae_modules import DCAE_Decoder, ResBlock
 from omegaconf import OmegaConf
 from diffusers.models import AutoencoderDC
 from copy import deepcopy
+from .unilip_internvl import DynamicTokenRouter
 
 class UniLIP_VAE_InternVL_MetaModel:
 
@@ -63,6 +64,25 @@ class UniLIP_VAE_InternVL_MetaModel:
             del self.llm_connector.embed_tokens
             llm_hidden_size = self.multi_modal_projector[-1].weight.shape[-1]
             self.projector = nn.Linear(llm_hidden_size, self.dit.config.caption_channels)
+
+            # Dynamic Token-Level Layer Routing
+            enable_dynamic_routing = getattr(config, 'enable_dynamic_routing', False)
+            if enable_dynamic_routing:
+                routing_num_layers = getattr(config, 'routing_num_layers', 4)
+                routing_temperature = getattr(config, 'routing_temperature', 1.0)
+                self.dynamic_router = DynamicTokenRouter(
+                    llm_hidden_size, routing_num_layers, routing_temperature
+                )
+                num_llm_layers = config.text_config.num_hidden_layers
+                step = max(1, num_llm_layers // routing_num_layers)
+                self.routing_layer_indices = [step * (i + 1) for i in range(routing_num_layers)]
+                self.routing_layer_indices[-1] = num_llm_layers
+                print(f"[VAE] DynamicTokenRouter enabled: selecting layers {self.routing_layer_indices} from {num_llm_layers} LLM layers")
+
+    def apply_dynamic_routing(self, all_hidden_states):
+        """Fuse multi-layer LLM features through the DynamicTokenRouter."""
+        selected = [all_hidden_states[i] for i in self.routing_layer_indices]
+        return self.dynamic_router(selected)
 
     def initialize_vision_modules(self, model_args, fsdp=None):
         self.fix_dit = model_args.fix_dit
@@ -167,12 +187,34 @@ class UniLIP_VAE_InternVL_MetaModel:
             print("latent_queries load from checkpoint!!!")
             self.latent_queries.requires_grad = True
         
+        # Dynamic Token-Level Layer Routing
+        enable_dynamic_routing = getattr(model_args, 'enable_dynamic_routing', False)
+        self.config.enable_dynamic_routing = enable_dynamic_routing
+        if enable_dynamic_routing:
+            routing_num_layers = getattr(model_args, 'routing_num_layers', 4)
+            routing_temperature = getattr(model_args, 'routing_temperature', 1.0)
+            self.config.routing_num_layers = routing_num_layers
+            self.config.routing_temperature = routing_temperature
+            num_llm_layers = self.config.text_config.num_hidden_layers
+            step = max(1, num_llm_layers // routing_num_layers)
+            self.routing_layer_indices = [step * (i + 1) for i in range(routing_num_layers)]
+            self.routing_layer_indices[-1] = num_llm_layers
+            if getattr(self, 'dynamic_router', None) is None:
+                print(f"[VAE] Initializing DynamicTokenRouter: layers={self.routing_layer_indices}, temperature={routing_temperature}")
+                llm_hs = self.config.text_config.hidden_size
+                self.dynamic_router = DynamicTokenRouter(llm_hs, routing_num_layers, routing_temperature)
+            else:
+                print(f"[VAE] DynamicTokenRouter loaded from checkpoint, layers={self.routing_layer_indices}")
+
         connect_require_grad = not self.fix_connect
         for p in self.llm_connector.parameters():
             p.requires_grad = connect_require_grad
         for p in self.projector.parameters():
             p.requires_grad = connect_require_grad
         self.latent_queries.requires_grad = connect_require_grad
+        if enable_dynamic_routing and hasattr(self, 'dynamic_router'):
+            for p in self.dynamic_router.parameters():
+                p.requires_grad = connect_require_grad
 
 
 class UniLIP_VAE_InternVL_MetaForCausalLM(ABC):

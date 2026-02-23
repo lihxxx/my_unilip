@@ -68,4 +68,12 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --run_name ${WANDB_NAME} \
     --fix_dit True \
     --fix_connect False \
-    --fix_llm True
+    --fix_llm True \
+    --use_dual_stream True \
+    --dual_stream_num_layers 6 \
+    --dual_stream_num_heads 16 \
+    --dual_stream_mlp_ratio 4.0 \
+    --dual_stream_dropout 0.0 \
+    --enable_dynamic_routing True \
+    --routing_num_layers 4 \
+    --routing_temperature 1.0

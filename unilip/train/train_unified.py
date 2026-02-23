@@ -114,20 +114,12 @@ class ModelArguments:
     repa_projector_dim: int = field(default=2048, metadata={"help": "Alignment投影头中间维度"})
     unfreeze_vision_encoder: bool = field(default=False, metadata={"help": "是否解冻vision encoder"})
     
-    # Dual Stream相关参数
-    use_dual_stream: bool = field(default=False, metadata={"help": "是否使用dual stream架构"})
-    dual_stream_num_layers: int = field(default=3, metadata={"help": "Semantic/Pixel stream transformer层数"})
-    dual_stream_num_heads: int = field(default=16, metadata={"help": "Semantic/Pixel stream attention头数"})
-    dual_stream_mlp_ratio: float = field(default=4.0, metadata={"help": "Semantic/Pixel stream MLP扩展比例"})
-    dual_stream_dropout: float = field(default=0.0, metadata={"help": "Semantic/Pixel stream dropout率"})
-    # Cross-stream交互参数
-    use_cross_stream: bool = field(default=False, metadata={"help": "是否使用跨流注意力交互"})
-    cross_stream_num_heads: int = field(default=16, metadata={"help": "跨流注意力头数"})
-    
-    # Semantic Distill Loss 参数
-    # semantic_feat (经过cross stream) -> 对齐 vit_proj_features
-    enable_semantic_distill: bool = field(default=False, metadata={"help": "是否启用Semantic Distill Loss (需要use_dual_stream=True)"})
-    semantic_distill_weight: float = field(default=0.1, metadata={"help": "Semantic Distill Loss权重"})
+    # Dual Stream相关参数 (matches tokenizer's dual_stream_pixeltrans)
+    use_dual_stream: bool = field(default=False, metadata={"help": "是否使用dual stream pixeltrans架构"})
+    dual_stream_num_layers: int = field(default=6, metadata={"help": "Pixel stream transformer层数"})
+    dual_stream_num_heads: int = field(default=16, metadata={"help": "Pixel stream attention头数"})
+    dual_stream_mlp_ratio: float = field(default=4.0, metadata={"help": "Pixel stream MLP扩展比例"})
+    dual_stream_dropout: float = field(default=0.0, metadata={"help": "Pixel stream dropout率"})
     
     # Dynamic Token-Level Layer Routing 参数
     enable_dynamic_routing: bool = field(default=False, metadata={"help": "启用词元级自适应层级路由，从LLM多层提取特征并动态融合"})
@@ -1066,10 +1058,6 @@ def train(attn_implementation=None):
     model.config.enable_repa = model_args.enable_repa  # 保持兼容
     model.config.repa_loss_weight = model_args.repa_loss_weight
     model.config.repa_encoder_depth = model_args.repa_encoder_depth
-    
-    # 保存Semantic Distill配置到模型config
-    model.config.enable_semantic_distill = model_args.enable_semantic_distill
-    model.config.semantic_distill_weight = model_args.semantic_distill_weight
     
     # 保存Dynamic Layer Routing配置到模型config
     model.config.enable_dynamic_routing = model_args.enable_dynamic_routing
