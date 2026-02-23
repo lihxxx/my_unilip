@@ -1,7 +1,7 @@
 experiment:
-    project: "unilip" # stage1 32gpu
-    name: "64gpu_stage2Fstage1_1b_dualstreamPixTrans616_10x00_224E256_pretrain_GAN30k_lr3e4x01E1e4W10k_100k"
-    output_dir: "checkpoints/64gpu_stage2Fstage1_1b_dualstreamPixTrans616_10x00_224E256_pretrain_GAN30k_lr3e4x01E1e4W10k_100k"
+    project: "unilip"
+    name: "64gpu_stage2F64stage1_1b_dualstreamPixTrans616_10x00_224E256_pretrain_GAN30k_lr3e4x005E1e4W10k_100k"
+    output_dir: "checkpoints/64gpu_stage2F64stage1_1b_dualstreamPixTrans616_10x00_224E256_pretrain_GAN30k_lr3e4x005E1e4W10k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
     eval_every: 10_000
@@ -21,7 +21,7 @@ model:
     mllm_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B"
     dc_ae_path: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/dc-ae-f32c32-sana-1.1-diffusers"
     # Stage2 specific
-    stage1_ckpt: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/32gpu_stage1Fstage0_1b_dualstreamPixTrans616_00_224E256_pretrain_GANnull_lr3e4W10k_100k/checkpoint-100000/ema_model/pytorch_model.bin"
+    stage1_ckpt: "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/64gpu_stage1Fstage0_1b_dualstreamPixTrans616_00_224E256_pretrain_GANnull_lr3e4W10k_100k/checkpoint-100000/ema_model/pytorch_model.bin"
     freeze_encoder: False
     output_distill_feat: True
     disable_drop_path: False
@@ -111,7 +111,7 @@ optimizer:
         beta2: 0.999
         weight_decay: 1e-4
         use_encoder_lr_scale: True
-        encoder_lr_scale: 0.1
+        encoder_lr_scale: 0.05
 
 
 lr_scheduler:

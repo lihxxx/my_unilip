@@ -134,7 +134,7 @@ def main(opt):
     pipe = CustomGenPipeline(multimodal_encoder=multi_model, tokenizer=tokenizer)
     # Load all prompts
     metadatas = []
-    json_dir = '../../data/WISE/data/'
+    json_dir = '/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/eval_bench/WISE/data'
     json_paths = ['cultural_common_sense.json', 'natural_science.json', 'spatio-temporal_reasoning.json']
     for json_path in json_paths:
         json_abs_path = os.path.join(json_dir, json_path)

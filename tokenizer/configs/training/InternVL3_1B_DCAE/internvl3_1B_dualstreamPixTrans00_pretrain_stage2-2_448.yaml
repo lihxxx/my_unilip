@@ -1,7 +1,7 @@
 experiment:
-    project: "unilip" # stage1 32gpu
-    name: "64gpu_stage2Fstage1_1b_dualstreamPixTrans616_10x00_224E256_pretrain_GAN30k_lr3e4x01E1e4W10k_100k"
-    output_dir: "checkpoints/64gpu_stage2Fstage1_1b_dualstreamPixTrans616_10x00_224E256_pretrain_GAN30k_lr3e4x01E1e4W10k_100k"
+    project: "unilip"
+    name: "16gpu_stage2F32stage1_1b_dualstreamPixTrans616_10x00_448E256_pretrain_GAN30k_lr3e4x01E1e4W10k_100k"
+    output_dir: "checkpoints/16gpu_stage2F32stage1_1b_dualstreamPixTrans616_10x00_448E256_pretrain_GAN30k_lr3e4x01E1e4W10k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
     eval_every: 10_000
@@ -25,7 +25,7 @@ model:
     freeze_encoder: False
     output_distill_feat: True
     disable_drop_path: False
-    use_gradient_checkpoint: False
+    use_gradient_checkpoint: True
     
     # Architecture Type Selection
     # Options:
@@ -93,8 +93,8 @@ dataset:
         dataset_with_class_label: False
         dataset_with_text_label: True
     preprocessing:
-        resize_shorter_edge: 224
-        crop_size: 224
+        resize_shorter_edge: 448
+        crop_size: 448
         random_crop: True
         random_flip: True
         normalize_mean: [0.485, 0.456, 0.406]
@@ -124,7 +124,7 @@ lr_scheduler:
 
 training:
     gradient_accumulation_steps: 1
-    per_gpu_batch_size: 32
+    per_gpu_batch_size: 16
     mixed_precision: "bf16"
     enable_tf32: True
     enable_wandb: True
