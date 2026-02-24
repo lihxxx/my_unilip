@@ -1,7 +1,7 @@
 experiment:
     project: "unilip"
-    name: "64gpu_stage2F64stage1_1b_dualstreamPixTrans616_50x00_224E256_pretrain_GAN30k_lr3e4x01E1e4W10k_100k"
-    output_dir: "checkpoints/64gpu_stage2F64stage1_1b_dualstreamPixTrans616_50x00_224E256_pretrain_GAN30k_lr3e4x01E1e4W10k_100k"
+    name: "64gpu_stage2F64stage1_1b_dualPixTrans616_cos10x00_224E256_pretrain_GAN30k_lr3e4x01E1e5W10k_100k"
+    output_dir: "checkpoints/64gpu_stage2F64stage1_1b_dualPixTrans616_cos10x00_224E256_pretrain_GAN30k_lr3e4x01E1e5W10k_100k"
     max_train_examples: 40_000_000
     save_every: 10_000
     eval_every: 10_000
@@ -123,7 +123,7 @@ lr_scheduler:
     params:
         learning_rate: ${optimizer.params.learning_rate}
         warmup_steps: 10_000
-        end_lr: 1e-4
+        end_lr: 1e-5
 
 
 training:
