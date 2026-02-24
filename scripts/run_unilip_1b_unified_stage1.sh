@@ -14,7 +14,7 @@ export GEN_IMG_FOLDER="${BASE_DIR}/data/BLIP3o-Pretrain-Long-Caption,${BASE_DIR}
 unset WANDB_DISABLED
 export WANDB_API_KEY="3ed65eb52edcc37a5e278a82dd874b44d4ffadb7"
 export WANDB_PROJECT="unilip_umm"
-export WANDB_NAME="unilip_intern_vl_1b_stage1"
+export WANDB_NAME="unilip_intern_vl_1b_stage1_dynamic4"
 export OUTPUT_FOLDER="${BASE_DIR}/results/${WANDB_NAME}"
 
 # ============== 训练命令 ==============
@@ -69,7 +69,7 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --fix_dit True \
     --fix_connect False \
     --fix_llm True \
-    --use_dual_stream True \
+    --use_dual_stream False \
     --dual_stream_num_layers 6 \
     --dual_stream_num_heads 16 \
     --dual_stream_mlp_ratio 4.0 \
