@@ -163,7 +163,9 @@ class DistillLoss(torch.nn.Module):
                  dc_ae_path: Optional[str] = None,
                  use_layerwise_distill: bool = False,
                  layerwise_beta: float = 2.0,
-                 layerwise_distill_layers: Optional[List[int]] = None):
+                 layerwise_distill_layers: Optional[List[int]] = None,
+                 distill_loss_type: str = "mse",
+                 distill_cosine_weight: float = 1.0):
         """Initializes the Distill class.
 
         Args:
@@ -178,6 +180,12 @@ class DistillLoss(torch.nn.Module):
                            Higher beta emphasizes poorly aligned layers more.
             layerwise_distill_layers: List of layer indices to use for distillation.
                                      If None, uses all layers.
+            distill_loss_type: Type of distillation loss. Options:
+                "mse" - Mean Squared Error loss (default)
+                "cosine" - Cosine similarity loss (1 - cos_sim)
+                "mse+cosine" - Weighted sum of MSE and cosine loss
+            distill_cosine_weight: Weight for cosine loss when using "mse+cosine" mode.
+                                  MSE weight is implicitly 1.0.
         """
         super().__init__()
         model = AutoModel.from_pretrained(
@@ -194,6 +202,14 @@ class DistillLoss(torch.nn.Module):
 
         for param in self.parameters():
             param.requires_grad = False
+        
+        # Distillation loss type config
+        assert distill_loss_type in ("mse", "cosine", "mse+cosine"), \
+            f"Unsupported distill_loss_type: {distill_loss_type}. Use 'mse', 'cosine', or 'mse+cosine'."
+        self.distill_loss_type = distill_loss_type
+        self.distill_cosine_weight = distill_cosine_weight
+        print(f"Distillation loss type: {distill_loss_type}" +
+              (f" (cosine_weight={distill_cosine_weight})" if distill_loss_type == "mse+cosine" else ""))
         
         # Semantic loss config
         self.use_semantic_loss = use_semantic_loss
@@ -372,6 +388,40 @@ class DistillLoss(torch.nn.Module):
         
         return total_loss, loss_dict
     
+    def _compute_distill_loss(
+        self,
+        out_feat: torch.Tensor,
+        ref_feat: torch.Tensor
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Compute distillation loss based on configured loss type.
+        
+        Args:
+            out_feat: Output features from the trainable encoder (B, N, D).
+            ref_feat: Reference features from frozen encoder (B, N, D).
+            
+        Returns:
+            distill_loss: The computed distillation loss.
+            loss_dict: Dictionary containing loss components for logging.
+        """
+        loss_dict = {}
+        
+        if self.distill_loss_type == "mse":
+            distill_loss = F.mse_loss(out_feat, ref_feat, reduction="mean")
+            
+        elif self.distill_loss_type == "cosine":
+            cosine_sim = F.cosine_similarity(out_feat, ref_feat, dim=-1)  # (B, N)
+            distill_loss = (1.0 - cosine_sim).mean()
+            
+        elif self.distill_loss_type == "mse+cosine":
+            mse_loss = F.mse_loss(out_feat, ref_feat, reduction="mean")
+            cosine_sim = F.cosine_similarity(out_feat, ref_feat, dim=-1)
+            cosine_loss = (1.0 - cosine_sim).mean()
+            distill_loss = mse_loss + self.distill_cosine_weight * cosine_loss
+            loss_dict['distill_mse_component'] = mse_loss.detach()
+            loss_dict['distill_cosine_component'] = cosine_loss.detach()
+        
+        return distill_loss, loss_dict
+    
     def _compute_semantic_loss(self, 
                                 ref_feat: torch.Tensor, 
                                 recon_feat: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
@@ -498,8 +548,9 @@ class DistillLoss(torch.nn.Module):
         # Compute standard distillation loss (semantic_feat/out_feat vs frozen encoder)
         # In dual-stream mode: out_feat is semantic_feat (after semantic_transformer)
         # This loss ensures semantic_transformer output aligns with frozen encoder
-        distill_loss = F.mse_loss(out_feat, ref_feat, reduction="mean")
+        distill_loss, distill_type_dict = self._compute_distill_loss(out_feat, ref_feat)
         loss_dict['distill_loss_raw'] = distill_loss.detach()
+        loss_dict.update(distill_type_dict)
         
         # Compute layer-wise distillation loss if enabled (independent of above)
         # This loss ensures ViT encoder layers align with frozen encoder layers

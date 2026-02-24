@@ -68,7 +68,11 @@ losses:
     # In dual_stream_simple mode: vit_embeds is used for distillation (no transformer processing)
     # This helps preserve semantic understanding capability
     distill_loss: /mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/InternVL3-1B
-    distill_weight: 5.0
+    distill_weight: 1.0
+    # Distillation loss type: "mse", "cosine", or "mse+cosine"
+    distill_loss_type: "cosine"
+    # Weight for cosine component when using "mse+cosine" mode (MSE weight is 1.0)
+    distill_cosine_weight: 1.0
     
     # Pixel Distillation loss (for pixel stream alignment with frozen DC-AE encoder)
     # pixel_latent (32-dim) from pixel stream is compared with DC-AE encoder output

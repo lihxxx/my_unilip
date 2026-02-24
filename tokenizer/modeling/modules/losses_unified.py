@@ -229,6 +229,9 @@ class ReconstructionLoss_Unified(torch.nn.Module):
             dc_ae_path = config.model.get("dc_ae_path", None) if self.arch_type in ["dual_stream_trans", "dual_stream_simple", "dual_stream_pixeltrans"] else None
             use_pixel_distill = (self.arch_type in ["dual_stream_trans", "dual_stream_simple", "dual_stream_pixeltrans"]) and self.pixel_distill_weight > 0.0
             
+            distill_loss_type = loss_config.get("distill_loss_type", "mse")
+            distill_cosine_weight = loss_config.get("distill_cosine_weight", 1.0)
+            
             self.distill_loss = DistillLoss(
                 distill_loss_path,
                 use_semantic_loss=(self.arch_type == "semantic_ae"),
@@ -238,7 +241,9 @@ class ReconstructionLoss_Unified(torch.nn.Module):
                 dc_ae_path=dc_ae_path,
                 use_layerwise_distill=self.use_layerwise_distill,
                 layerwise_beta=self.layerwise_beta,
-                layerwise_distill_layers=self.layerwise_distill_layers
+                layerwise_distill_layers=self.layerwise_distill_layers,
+                distill_loss_type=distill_loss_type,
+                distill_cosine_weight=distill_cosine_weight
             ).eval()
             print(f"Distillation loss enabled with weight {self.distill_weight}")
             if self.use_layerwise_distill:
