@@ -1,5 +1,6 @@
 WANDB_MODE=offline accelerate launch --num_machines=1 --num_processes=1 --machine_rank=0 --main_process_ip=127.0.0.1 --main_process_port=9997 --same_network \
-    scripts/inference.py config=configs/training/InternVL3_1B_DCAE/internvl3_1B_stage2_test_256.yaml \
-    checkpoint_path="1b_unilip.pth" \
+    scripts/inference.py config=/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/unilip_1b_dual_stream_pixel_distill_224_IN_GAN25k/config.yaml \
+    checkpoint_path=/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/checkpoints/unilip_1b_dual_stream_pixel_distill_224_IN_GAN25k/checkpoint-50000/ema_model/pytorch_model.bin \
+    model.use_padding=False \
     img_path="xxx.jpg" \
-    experiment.project="1B_stage2" experiment.name="1B_stage2" experiment.output_dir="1B_stage2" training.per_gpu_batch_size=16
+    dataset.preprocessing.resize_shorter_edge=224 dataset.preprocessing.crop_size=224
