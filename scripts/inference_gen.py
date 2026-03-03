@@ -12,7 +12,7 @@ from unilip.mm_utils import get_model_name_from_path
 from unilip.pipeline_gen import CustomGenPipeline
 import random
 
-model_path = sys.argv[1]
+model_path = "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/results/unilip_intern_vl_1b_sft_alignment_distill05_D6"
 disable_torch_init()
 model_path = os.path.expanduser(model_path)
 model_name = get_model_name_from_path(model_path)
@@ -54,15 +54,18 @@ def set_global_seed(seed=42):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-generator = torch.Generator(device=multi_model.device).manual_seed(4)
-prompt = "A birthday cake with 'Happy Birthday' written on it"
-set_global_seed(seed=4)
+generator = torch.Generator(device=multi_model.device).manual_seed(1024)
+prompt = "The words 'SPAR' are clearly written in the wet, golden sand, with gentle blue waves washing up right below the text. "
+set_global_seed(seed=1024)
 gen_images = []
 for i in range(4):
-    gen_img = pipe(add_template([f"Generate an image: {prompt}", "Generate an image."]), guidance_scale=3.0, generator=generator)
+    gen_img = pipe(add_template([f"Generate an image: {prompt}", "Generate an image."]), guidance_scale=3.1, generator=generator)
     gen_images.append(gen_img)
 print(f"finish {prompt}")
 
+for i, img in enumerate(gen_images):
+    img.save(f"{prompt[:100]}_{i}.png")
+    
 grid_image = create_image_grid(gen_images, 2, 2)
 grid_image.save(f"{prompt[:100]}.png")
 

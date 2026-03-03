@@ -76,7 +76,7 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --logging_steps 1 \
     --tf32 True \
     --gradient_checkpointing True \
-    --dataloader_num_workers 16 \
+    --dataloader_num_workers 8 \
     --lazy_preprocess True \
     --n_query 256 \
     --n_und_query 0 \
@@ -89,7 +89,7 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --repa_loss_weight ${ALIGNMENT_LOSS_WEIGHT} \
     --repa_encoder_depth ${ALIGNMENT_ENCODER_DEPTH} \
     --unfreeze_vision_encoder ${UNFREEZE_VISION_ENCODER} \
-    --use_dual_stream True \
+    --use_dual_stream False \
     --dual_stream_num_layers 6 \
     --dual_stream_num_heads 16 \
     --dual_stream_mlp_ratio 4.0 \

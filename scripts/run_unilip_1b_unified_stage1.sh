@@ -60,7 +60,7 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --logging_steps 1 \
     --tf32 True \
     --gradient_checkpointing True \
-    --dataloader_num_workers 16 \
+    --dataloader_num_workers 8 \
     --lazy_preprocess True \
     --n_query 256 \
     --n_und_query 0 \

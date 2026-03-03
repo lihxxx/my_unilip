@@ -12,7 +12,7 @@ from unilip.mm_utils import get_model_name_from_path
 from unilip.pipeline_edit import CustomEditPipeline
 import random
 
-model_path = sys.argv[1]
+model_path = "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/results/unilip_intern_vl_1b_sft_alignment_distill05_D6"
 disable_torch_init()
 model_path = os.path.expanduser(model_path)
 model_name = get_model_name_from_path(model_path)

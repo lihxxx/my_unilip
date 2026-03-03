@@ -13,13 +13,13 @@ export GEN_IMG_FOLDER="${BASE_DIR}/data/BLIP3o-Pretrain-Long-Caption,${BASE_DIR}
 export EDIT_IMG_FOLDER="${BASE_DIR}/data/GPT-Edit"
 
 # Stage1的checkpoint路径（请修改为实际路径）
-export STAGE1_CKPT="${BASE_DIR}/results/unilip_intern_vl_1b_stage1/checkpoint-xxx"
+export STAGE1_CKPT="/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/results/unilip_intern_vl_1b_stage1_dynamic4/checkpoint-23410"
 
 # ============== WandB配置 ==============
 unset WANDB_DISABLED
 export WANDB_API_KEY="3ed65eb52edcc37a5e278a82dd874b44d4ffadb7"
 export WANDB_PROJECT="unilip_umm"
-export WANDB_NAME="unilip_intern_vl_1b_stage2"
+export WANDB_NAME="unilip_intern_vl_1b_stage2_dynamic4_distill05D6"
 export OUTPUT_FOLDER="${BASE_DIR}/results/${WANDB_NAME}"
 
 # ============== Alignment Distill Loss 配置 ==============
@@ -73,7 +73,7 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --logging_steps 1 \
     --tf32 True \
     --gradient_checkpointing True \
-    --dataloader_num_workers 16 \
+    --dataloader_num_workers 8 \
     --lazy_preprocess True \
     --n_query 256 \
     --n_und_query 0 \
@@ -86,7 +86,7 @@ torchrun --nproc_per_node=8 --nnodes=$WORLD_SIZE --node_rank=$RANK --master_port
     --repa_loss_weight ${ALIGNMENT_LOSS_WEIGHT} \
     --repa_encoder_depth ${ALIGNMENT_ENCODER_DEPTH} \
     --unfreeze_vision_encoder ${UNFREEZE_VISION_ENCODER} \
-    --use_dual_stream True \
+    --use_dual_stream False \
     --dual_stream_num_layers 6 \
     --dual_stream_num_heads 16 \
     --dual_stream_mlp_ratio 4.0 \
