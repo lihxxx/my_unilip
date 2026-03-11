@@ -22,3 +22,7 @@ data
 unilip.egg-info
 results
 */models
+
+*.png
+*.jpg
+*.jpeg

@@ -119,7 +119,17 @@ def main():
     logger.info("Reconstructing images...")
     img_path = config.img_path
     original_images = Image.open(img_path).convert('RGB')
-    original_images = img_transform(original_images).to(accelerator.device)
+
+    # 先做空间变换（Resize + CenterCrop），保存预处理后的输入图片
+    spatial_transform = transforms.Compose([
+        transforms.Resize(crop_size, interpolation=interpolation, antialias=True),
+        transforms.CenterCrop(crop_size),
+    ])
+    preprocessed_images = spatial_transform(original_images)
+    preprocessed_images.save('input.jpg')
+    logger.info(f"Saved preprocessed input image to input.jpg")
+
+    original_images = img_transform(original_images).unsqueeze(0).to(accelerator.device)
 
     with torch.no_grad():
         model.eval()

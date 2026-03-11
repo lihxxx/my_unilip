@@ -12,8 +12,7 @@ from unilip.mm_utils import get_model_name_from_path
 from unilip.pipeline_edit import CustomEditPipeline
 import random
 
-model_path = "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/results/unilip_intern_vl_1b_sft_alignment_distill05_D6"
-disable_torch_init()
+model_path = "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/UniLIP-3B"
 model_path = os.path.expanduser(model_path)
 model_name = get_model_name_from_path(model_path)
 tokenizer, multi_model, context_len = load_pretrained_model_general('UniLIP_InternVLForCausalLM', model_path, None, model_name)
@@ -58,8 +57,8 @@ def set_global_seed(seed=42):
     torch.cuda.manual_seed_all(seed)
 
 generator = torch.Generator(device=multi_model.device).manual_seed(42)
-prompt = "Replace the camper van in the image with a hot air balloon."
-input_image_path = "../demo/edit_input.jpg"
+prompt = "Add a Santa hat to the dog's head in the image."
+input_image_path = "/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/tokenizer/input.jpg"
 input_image = Image.open(input_image_path)
 set_global_seed(seed=42)
 gen_images = []
