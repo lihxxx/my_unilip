@@ -1,0 +1,166 @@
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+% ---------------------------------------------------------------
+% Include basic CVPR package in rebuttal mode
+
+\usepackage[rebuttal]{cvpr}
+
+% ---------------------------------------------------------------
+% Other packages
+
+% Commonly used abbreviations (\eg, \ie, \etc, \cf, \etal, etc.)
+\usepackage{eccvabbrv}
+
+% Include other packages here, before hyperref.
+\usepackage{graphicx}
+\usepackage{booktabs}
+
+% The "axessiblity" package can be found at: https://ctan.org/pkg/axessibility?lang=en
+\usepackage[accsupp]{axessibility}  % Improves PDF readability for those with disabilities.
+
+
+% ---------------------------------------------------------------
+% Hyperref package
+% If you comment hyperref and then uncomment it, you should delete
+% egpaper.aux before re-running latex.  (Or just hit 'q' on the first latex
+% run, let it finish, and you should be clear).
+
+\definecolor{eccvblue}{rgb}{0.12,0.49,0.85}
+\definecolor{rOneColor}{rgb}{0.95,0.22,0.18}
+\definecolor{rTwoColor}{rgb}{0.72,0.35,0.92}
+\definecolor{rThreeColor}{rgb}{0.10,0.72,0.32}
+\definecolor{questionColor}{rgb}{0.12,0.50,0.95}
+\newcommand{\Rone}[1]{\textcolor{rOneColor}{#1}}
+\newcommand{\Rtwo}[1]{\textcolor{rTwoColor}{#1}}
+\newcommand{\Rthree}[1]{\textcolor{rThreeColor}{#1}}
+\newcommand{\Qtext}[1]{\textcolor{questionColor}{#1}}
+\renewcommand{\thetable}{\Alph{table}}
+\usepackage[pagebackref,breaklinks,colorlinks,citecolor=eccvblue]{hyperref}
+
+
+% ---------------------------------------------------------------
+% If you wish to avoid re-using figure, table, and equation numbers from
+% the main paper, please uncomment the following and change the numbers
+% appropriately.
+%\setcounter{figure}{2}
+%\setcounter{table}{1}
+%\setcounter{equation}{2}
+
+% If you wish to avoid re-using reference numbers from the main paper,
+% please uncomment the following and change the counter for `enumiv' to
+% the number of references you have in the main paper (here, 6).
+%\let\oldthebibliography=\thebibliography
+%\let\oldendthebibliography=\endthebibliography
+%\renewenvironment{thebibliography}[1]{%
+%     \oldthebibliography{#1}%
+%     \setcounter{enumiv}{6}%
+%}{\oldendthebibliography}
+
+
+% ---------------------------------------------------------------
+% TODO REBUTTAL: Please enter paper ID
+\def\paperID{5523} % *** Enter the paper ID here
+\def\confName{ECCV}
+\def\confYear{2026}
+
+\begin{document}
+
+% ---------------------------------------------------------------
+% TODO REBUTTAL: Please enter paper title
+\title{SPAR: Semantic-Pixel Self-Alignment and Adaptive Routing for Unified Multimodal Models}  % **** Enter the paper title here
+
+\maketitle
+\thispagestyle{empty}
+\appendix
+
+
+% ---------------------------------------------------------------
+% TODO REBUTTAL: Enter your response below
+\noindent We sincerely thank the reviewers for their constructive comments. We are encouraged that the reviewers recognize the importance of bridging semantic understanding and pixel-level generation, as well as the effectiveness of SPAR's coherent design and comprehensive empirical results. We believe the following clarifications and additional analyses substantially strengthen the paper.
+
+\noindent[\textit{\Rone{XtYZ}, \Rtwo{F1M7}}.] \textbf{\Qtext{Q1: Novelty and contribution.}} \textbf{\Qtext{A:}} SPAR is best positioned as an applied/system-level contribution. Our claim is not that each primitive is entirely new, but that their coupling solves a concrete bottleneck in unified MLLMs: semantic encoders preserve understanding but lose pixel details. SPAR decouples semantic preservation and pixel reconstruction in the tokenizer, then uses this tokenizer as the generator's alignment target. We revise the paper to state this contribution more precisely.
+
+\noindent[\textit{\Rone{XtYZ}, \Rthree{umgx}}.] \textbf{\Qtext{Q2: DTR ablation.}} \textbf{\Qtext{A:}} Tab.~\ref{tab:dtr} provides stronger baselines beyond last-layer-only. We also include DTR visualizations showing token-dependent layer preferences.
+\begin{table}[h]
+\centering\small
+\setlength{\tabcolsep}{2.0pt}
+\begin{tabular}{lccc}
+\toprule
+Fusion & GenEval$\uparrow$ & WISE$\uparrow$ & ImgEdit$\uparrow$ \\
+\midrule
+Last layer & -- & -- & -- \\
+Static avg. & -- & -- & -- \\
+Static concat. & -- & -- & -- \\
+Token-agnostic learned & -- & -- & -- \\
+DTR & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\caption{DTR ablation with stronger multi-layer baselines.}
+\label{tab:dtr}
+\end{table}
+
+\noindent[\textit{\Rtwo{F1M7}, \Rthree{umgx}}.] \textbf{\Qtext{Q3: Training-stage analysis.}} \textbf{\Qtext{A:}} The tokenizer stages isolate different goals: Stage I learns semantic-to-pixel mapping, Stage II adapts the decoder, and Stage III fine-tunes the encoder with semantic self-distillation. Tab.~\ref{tab:tokenizer} provides the requested stage/design ablation.
+\begin{table}[h]
+\centering\small
+\setlength{\tabcolsep}{2.0pt}
+\begin{tabular}{lccccc}
+\toprule
+Setting & rFID$\downarrow$ & PSNR$\uparrow$ & MMB$\uparrow$ & GenEval$\uparrow$ & WISE$\uparrow$ \\
+\midrule
+Stage I & -- & -- & -- & -- & -- \\
+Stage I+II & -- & -- & -- & -- & -- \\
+Full stages & -- & -- & -- & -- & -- \\
+w/o pixel str. & -- & -- & -- & -- & -- \\
+w/o semantic str. & -- & -- & -- & -- & -- \\
+Full tokenizer & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\caption{Tokenizer stage/design ablations on reconstruction, understanding, and generation.}
+\label{tab:tokenizer}
+\end{table}
+
+\noindent[\textit{\Rone{XtYZ}, \Rtwo{F1M7}, \Rthree{umgx}}.] \textbf{\Qtext{Q4: Cost and reproducibility.}} \textbf{\Qtext{A:}} Tab.~\ref{tab:cost} reports training data size, extra trainable parameters, GPU hours, and wall-clock training time, and compares SPAR with representative unified models.
+
+\begin{table}[h]
+\centering\small
+\setlength{\tabcolsep}{2.0pt}
+\begin{tabular}{lcccc}
+\toprule
+Model & Data & Extra params & Cost & GenEval/WISE \\
+\midrule
+OpenUni-L & -- & -- & -- & --/-- \\
+BAGEL & -- & -- & -- & --/-- \\
+BLIP3-o & -- & -- & -- & --/-- \\
+SPAR-3B & -- & -- & -- & --/-- \\
+\bottomrule
+\end{tabular}
+\caption{Training data, extra parameters, and cost comparison.}
+\label{tab:cost}
+\end{table}
+
+\noindent[\textit{\Rone{XtYZ}}.] \textbf{\Qtext{Q5: Results on GEdit-Bench.}} \textbf{\Qtext{A:}} Tab.~\ref{tab:gedit} provides the additional GEdit-Bench comparison. This complements ImgEdit and strengthens the editing evaluation.
+\begin{table}[h]
+\centering\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcc}
+\toprule
+Model & ImgEdit$\uparrow$ & GEdit-Bench$\uparrow$ \\
+\midrule
+BAGEL & -- & -- \\
+OmniGen2 & -- & -- \\
+SPAR-3B & -- & -- \\
+\bottomrule
+\end{tabular}
+\caption{Additional editing benchmark comparison.}
+\label{tab:gedit}
+\end{table}
+
+\noindent[\textit{\Rthree{umgx}}.] \textbf{\Qtext{Q6: OpenUni comparison.}} \textbf{\Qtext{A:}} OpenUni is a particularly relevant baseline because it also builds on InternVL3-2B. SPAR-3B improves over OpenUni-L on GenEval (0.91 vs. 0.85) and WISE (0.64 vs. 0.52). The key difference is that SPAR optimizes the visual representation space itself via semantic-pixel self-alignment, rather than only connecting the MLLM to a generator.
+
+\noindent[\textit{\Rtwo{F1M7}}.] \textbf{\Qtext{Q7: DTR vs. MoE.}} \textbf{\Qtext{A:}} DTR is not expert routing. MoE routes tokens to different parameterized experts and often needs dispatch/load-balancing losses. DTR routes each token over depths of the same MLLM hidden states, adds no expert networks, and is directly interpretable as token-wise layer preference.
+
+\noindent[\textit{\Rtwo{F1M7}}.] \textbf{\Qtext{Q8: Self-alignment analysis.}} \textbf{\Qtext{A:}} We did not mean removing all pretrained visual backbones. The intended claim is narrower: SPAR removes the need for a separate external alignment teacher such as DINOv2/CLIP during generative training. The teacher is the same unified tokenizer used by SPAR, reducing understanding-generation space mismatch. We revise the wording and include convergence curves with/without self-alignment.
+
+\noindent[\textit{\Rone{XtYZ}}.] \textbf{\Qtext{Q9: Presentation and citation issues.}} \textbf{\Qtext{A:}} We better explain Fig.~1(b), weaken/replace the blog-based citation [3] for the external-alignment claim, and fix the ``self-lignment'' typo.
+
+\end{document}
