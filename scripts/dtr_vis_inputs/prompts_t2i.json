@@ -1,0 +1,10 @@
+[
+  {"id": "t2i_001", "prompt": "A red cat sitting on a blue sofa in a cozy room", "keywords": "cat,sofa,room"},
+  {"id": "t2i_002", "prompt": "A castle on a cliff at sunset with dramatic clouds", "keywords": "castle,cliff,sunset,clouds"},
+  {"id": "t2i_003", "prompt": "A bowl of fresh strawberries on a wooden table next to a glass of milk", "keywords": "strawberries,bowl,table,milk"},
+  {"id": "t2i_004", "prompt": "A futuristic city skyline at night with neon lights and flying cars", "keywords": "skyline,neon,cars"},
+  {"id": "t2i_005", "prompt": "A close-up portrait of an old fisherman with a weathered face holding a wooden pipe", "keywords": "fisherman,face,pipe"},
+  {"id": "t2i_006", "prompt": "An astronaut riding a horse on the surface of Mars", "keywords": "astronaut,horse,Mars"},
+  {"id": "t2i_007", "prompt": "A bonsai tree on a stone in a Japanese zen garden with raked sand", "keywords": "bonsai,stone,sand"},
+  {"id": "t2i_008", "prompt": "A vintage red bicycle leaning against a brick wall covered in green ivy", "keywords": "bicycle,wall,ivy"}
+]

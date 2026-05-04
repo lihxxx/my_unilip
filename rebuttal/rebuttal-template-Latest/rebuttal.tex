@@ -80,7 +80,7 @@
 
 \noindent[\textit{\Rone{XtYZ}, \Rtwo{F1M7}}.] \textbf{\Qtext{Q1: Novelty and contribution.}} \textbf{\Qtext{A:}} SPAR is best positioned as an applied/system-level contribution. Our claim is not that each primitive is entirely new, but that their coupling solves a concrete bottleneck in unified MLLMs: semantic encoders preserve understanding but lose pixel details. SPAR decouples semantic preservation and pixel reconstruction in the tokenizer, then uses this tokenizer as the generator's alignment target. We revise the paper to state this contribution more precisely.
 
-\noindent[\textit{\Rone{XtYZ}, \Rthree{umgx}}.] \textbf{\Qtext{Q2: DTR ablation.}} \textbf{\Qtext{A:}} Tab.~\ref{tab:dtr} provides stronger baselines beyond last-layer-only. We also include DTR visualizations showing token-dependent layer preferences.
+\noindent[\textit{\Rone{XtYZ}, \Rthree{umgx}}.] \textbf{\Qtext{Q2: DTR ablation and layer usage.}} \textbf{\Qtext{A:}} Tab.~\ref{tab:dtr} adds stronger multi-layer baselines (static average, static concatenation, token-agnostic learned weights). Fig.~\ref{fig:dtr} answers the layer-usage question with three parameter-free proxies that we evaluate on the K=4 candidate layers $\{L_{\!7},L_{14},L_{21},L_{28}\}$ DTR is configured to read: activation magnitude, cross-layer novelty $1{-}\cos(h^l,h^{l-1})$, and top-layer alignment $\cos(h^l,h^{L})$. Across all proxies, the per-token argmax is spread over multiple layers (no layer dominates), and shallow vs.\ deep layers are systematically preferred by different image regions (texture/background vs.\ semantic objects), confirming that DTR has non-trivial multi-layer information to exploit.
 \begin{table}[h]
 \centering\small
 \setlength{\tabcolsep}{2.0pt}
@@ -98,6 +98,12 @@ DTR & -- & -- & -- \\
 \caption{DTR ablation with stronger multi-layer baselines.}
 \label{tab:dtr}
 \end{table}
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{figs/dtr_vis.pdf}
+\caption{Training-free DTR proxies on the released SPAR-1B (no trained router). \textbf{Left:} per-token argmax layer histogram over $\{L_{\!7},L_{14},L_{21},L_{28}\}$; usage is distributed, not collapsed. \textbf{Right:} token-level dominant-layer overlay showing region-dependent depth preference.}
+\label{fig:dtr}
+\end{figure}
 
 \noindent[\textit{\Rtwo{F1M7}, \Rthree{umgx}}.] \textbf{\Qtext{Q3: Training-stage analysis.}} \textbf{\Qtext{A:}} The tokenizer stages isolate different goals: Stage I learns semantic-to-pixel mapping, Stage II adapts the decoder, and Stage III fine-tunes the encoder with semantic self-distillation. Tab.~\ref{tab:tokenizer} provides the requested stage/design ablation.
 \begin{table}[h]
