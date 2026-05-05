@@ -315,6 +315,68 @@ def _compute_keyword_similarity_maps(
     return maps
 
 
+def _gaussian_kernel(sigma_px: float) -> np.ndarray:
+    if sigma_px <= 0:
+        return np.array([[1.0]])
+    radius = max(1, int(round(3.0 * sigma_px)))
+    coords = np.arange(-radius, radius + 1, dtype=np.float32)
+    g = np.exp(-(coords ** 2) / (2 * sigma_px ** 2))
+    g = g / g.sum()
+    return g[:, None] * g[None, :]
+
+
+def _smooth(map_2d: np.ndarray, sigma_px: float) -> np.ndarray:
+    if sigma_px <= 0:
+        return map_2d
+    k = _gaussian_kernel(sigma_px)
+    pad = k.shape[0] // 2
+    padded = np.pad(map_2d, pad, mode="edge")
+    out = np.zeros_like(map_2d)
+    H, W = map_2d.shape
+    for i in range(H):
+        for j in range(W):
+            out[i, j] = float(np.sum(padded[i:i + k.shape[0], j:j + k.shape[1]] * k))
+    return out
+
+
+def _compute_keyword_attention_grids(
+    hidden_states: torch.Tensor,
+    tokenizer,
+    pos_prompt: str,
+    keywords: List[str],
+    n_query: int,
+) -> Dict[str, np.ndarray]:
+    """Per-keyword cosine-similarity map at the visual-token grid resolution.
+
+    Returns {keyword: ndarray[gs, gs]} (un-normalised, raw cosine values in [-1,1]).
+    """
+    hs = hidden_states[0]
+    n_text = hs.shape[0] - n_query
+    text_h = hs[:n_text]
+    vis_h = hs[n_text:]
+    gs = int(np.sqrt(n_query))
+
+    grids: Dict[str, np.ndarray] = {}
+    vis_norm = F.normalize(vis_h.float(), dim=-1)
+    for kw in keywords:
+        pos = find_keyword_token_positions(tokenizer, pos_prompt, kw)
+        if not pos:
+            continue
+        kw_vec = F.normalize(text_h[pos].float().mean(0, keepdim=True), dim=-1)
+        sim = (vis_norm @ kw_vec.T).squeeze(-1)  # [N_query]
+        grids[kw] = sim.view(gs, gs).numpy()
+    return grids
+
+
+def _focus_score(grid: np.ndarray, top_frac: float = 0.1) -> float:
+    """Mean of top-k% / mean overall. Higher = more spatially focused."""
+    flat = grid.flatten()
+    k = max(1, int(round(top_frac * flat.size)))
+    top_mean = float(np.sort(flat)[-k:].mean())
+    overall_mean = float(flat.mean())
+    return top_mean - overall_mean
+
+
 # ────────────────────────────────────────────────────────────
 # Plotting functions
 # ────────────────────────────────────────────────────────────
@@ -501,6 +563,198 @@ def plot_rebuttal_summary(
     plt.tight_layout(rect=(0, 0.035, 1, 1))
     _save_fig_dual(fig, save_path)
     print(f"Rebuttal summary DTR figure → {save_path} (+ .png)")
+    plt.close(fig)
+
+
+# ────────────────────────────────────────────────────────────
+# Keyword attention overlay (DTR vs no-DTR comparison)
+# ────────────────────────────────────────────────────────────
+def _normalise_attention(grid: np.ndarray, image_hw: tuple, smooth_sigma_px: float = 8.0) -> np.ndarray:
+    """gs×gs grid → H×W normalised heatmap with optional Gaussian smoothing."""
+    H, W = image_hw
+    g = torch.from_numpy(grid).float()[None, None]
+    up = F.interpolate(g, (H, W), mode="bilinear", align_corners=False).squeeze().numpy()
+    if smooth_sigma_px > 0:
+        up = _smooth(up, smooth_sigma_px)
+    lo, hi = np.percentile(up, [5, 99])
+    up = np.clip((up - lo) / (hi - lo + 1e-8), 0, 1)
+    return up
+
+
+def plot_keyword_attention(
+    image: Image.Image,
+    hidden_states: torch.Tensor,
+    tokenizer,
+    pos_prompt: str,
+    keywords: List[str],
+    n_query: int,
+    save_path: str,
+    smooth_sigma_px: float = 8.0,
+):
+    """Per-keyword attention map overlay for a single image."""
+    img_np = np.array(image)
+    H, W = img_np.shape[:2]
+    grids = _compute_keyword_attention_grids(hidden_states, tokenizer, pos_prompt, keywords, n_query)
+    if not grids:
+        print(f"No valid keywords for attention overlay (prompt={pos_prompt[:40]}…)")
+        return
+
+    nk = len(grids)
+    fig, axes = plt.subplots(1, nk + 1, figsize=(2.4 * (nk + 1), 2.6))
+    if nk + 1 == 1:
+        axes = [axes]
+
+    axes[0].imshow(img_np)
+    axes[0].set_title("Generated", weight="bold", fontsize=10)
+    axes[0].axis("off")
+
+    for ax, (kw, grid) in zip(axes[1:], grids.items()):
+        attn = _normalise_attention(grid, (H, W), smooth_sigma_px)
+        focus = _focus_score(grid)
+        ax.imshow(img_np, alpha=0.4)
+        ax.imshow(attn, cmap="turbo", alpha=0.65, vmin=0, vmax=1)
+        ax.set_title(f'"{kw}"\nfocus={focus:+.2f}', weight="bold", fontsize=10)
+        ax.axis("off")
+
+    plt.tight_layout()
+    _save_fig_dual(fig, save_path)
+    print(f"Keyword attention → {save_path} (+ .png)")
+    plt.close(fig)
+
+
+def plot_keyword_compare(
+    records: List[Dict],
+    save_path: str,
+    keywords_per_record: Optional[List[List[str]]] = None,
+    max_keywords_per_sample: int = 2,
+    smooth_sigma_px: float = 8.0,
+    label_dtr: str = "w/ DTR",
+    label_base: str = "w/o DTR",
+):
+    """Side-by-side DTR vs baseline keyword attention overlay.
+
+    Each row uses its own keyword set (taken from `keywords_per_record[i]` or
+    `records[i]["keywords"]`). The layout is fixed at:
+
+        | Generated (DTR) | Generated (Base) |
+        | kw1 DTR | kw1 Base | kw2 DTR | kw2 Base | ...
+
+    Up to `max_keywords_per_sample` keywords are visualised per row; missing
+    keywords (or rows with fewer keywords than the global maximum) leave blank
+    cells so columns stay aligned.
+    """
+    if not records:
+        return
+
+    if keywords_per_record is None:
+        keywords_per_record = [rec.get("keywords", []) for rec in records]
+
+    # Resolve a per-row keyword list, restricted to keywords actually found in
+    # the DTR-side prompt tokens (so the layout reflects what we can plot).
+    resolved: List[List[str]] = []
+    for rec, kws in zip(records, keywords_per_record):
+        grids = _compute_keyword_attention_grids(
+            rec["hs_dtr"], rec["tokenizer"], rec["pos_prompt"], kws, rec["n_query"]
+        )
+        valid = [kw for kw in kws if kw in grids][:max_keywords_per_sample]
+        resolved.append(valid)
+
+    max_kw = max((len(v) for v in resolved), default=0)
+    if max_kw == 0:
+        print("No keyword survived tokenisation in any sample; skipping compare figure.")
+        return
+
+    nrows = len(records)
+    # 2 generated-image cols + 2 cols per keyword slot.
+    ncols = 2 + 2 * max_kw
+    fig, axes = plt.subplots(nrows, ncols, figsize=(1.85 * ncols, 1.95 * nrows))
+    if nrows == 1:
+        axes = np.array([axes])
+    if ncols == 1:
+        axes = axes.reshape(nrows, 1)
+
+    headers = [f"Generated\n{label_dtr}", f"Generated\n{label_base}"]
+    for slot in range(max_kw):
+        headers.append(f"kw{slot + 1}\n{label_dtr}")
+        headers.append(f"kw{slot + 1}\n{label_base}")
+    for ax, header in zip(axes[0], headers):
+        ax.set_title(header, fontsize=9.5, weight="bold", pad=4)
+
+    for row, (rec, valid_kws) in enumerate(zip(records, resolved)):
+        img_dtr_np = np.array(rec["image_dtr"])
+        img_base_np = np.array(rec["image_base"])
+        H, W = img_dtr_np.shape[:2]
+        Hb, Wb = img_base_np.shape[:2]
+
+        # Generated images.
+        ax = axes[row, 0]
+        ax.imshow(img_dtr_np)
+        ax.set_ylabel(
+            f"{rec.get('id', row + 1)}\n{textwrap.shorten(rec.get('prompt',''), width=22, placeholder='...')}",
+            rotation=0, ha="right", va="center", fontsize=8,
+        )
+        ax.axis("off")
+
+        ax = axes[row, 1]
+        ax.imshow(img_base_np)
+        ax.axis("off")
+
+        grids_dtr = _compute_keyword_attention_grids(
+            rec["hs_dtr"], rec["tokenizer"], rec["pos_prompt"], valid_kws, rec["n_query"]
+        )
+        grids_base = _compute_keyword_attention_grids(
+            rec["hs_base"], rec["tokenizer"], rec["pos_prompt"], valid_kws, rec["n_query"]
+        )
+
+        for slot in range(max_kw):
+            col_dtr = 2 + 2 * slot
+            col_base = col_dtr + 1
+
+            ax_d = axes[row, col_dtr]
+            ax_b = axes[row, col_base]
+
+            if slot < len(valid_kws):
+                kw = valid_kws[slot]
+
+                if kw in grids_dtr:
+                    attn = _normalise_attention(grids_dtr[kw], (H, W), smooth_sigma_px)
+                    ax_d.imshow(img_dtr_np, alpha=0.4)
+                    ax_d.imshow(attn, cmap="turbo", alpha=0.7, vmin=0, vmax=1)
+                    ax_d.text(
+                        0.02, 0.96, f'"{kw}"  focus {_focus_score(grids_dtr[kw]):+.2f}',
+                        transform=ax_d.transAxes, ha="left", va="top", fontsize=7,
+                        bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", pad=1.5),
+                    )
+                else:
+                    ax_d.imshow(img_dtr_np)
+
+                if kw in grids_base:
+                    attn = _normalise_attention(grids_base[kw], (Hb, Wb), smooth_sigma_px)
+                    ax_b.imshow(img_base_np, alpha=0.4)
+                    ax_b.imshow(attn, cmap="turbo", alpha=0.7, vmin=0, vmax=1)
+                    ax_b.text(
+                        0.02, 0.96, f'"{kw}"  focus {_focus_score(grids_base[kw]):+.2f}',
+                        transform=ax_b.transAxes, ha="left", va="top", fontsize=7,
+                        bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", pad=1.5),
+                    )
+                else:
+                    ax_b.imshow(img_base_np)
+            else:
+                ax_d.set_visible(False)
+                ax_b.set_visible(False)
+
+            ax_d.axis("off")
+            ax_b.axis("off")
+
+    fig.text(
+        0.5, 0.005,
+        f"Per-keyword text→visual cosine attention. Higher 'focus' (top-10% mean − overall mean) "
+        f"means sharper localisation. Pairs: {label_dtr} vs {label_base} (same prompt & seed).",
+        ha="center", fontsize=8, color="#444444",
+    )
+    plt.tight_layout(rect=(0, 0.025, 1, 1))
+    _save_fig_dual(fig, save_path)
+    print(f"DTR vs baseline keyword attention → {save_path} (+ .png)")
     plt.close(fig)
 
 
@@ -740,6 +994,9 @@ def process_one_prompt(
     seed: int = 42,
     focus_layers: Optional[List[int]] = None,
     skip_object_regions: bool = False,
+    image_filename: str = "generated.png",
+    smooth_sigma_px: float = 8.0,
+    keyword_attention_filename: Optional[str] = "keyword_attention.pdf",
 ):
     """Generate one image, capture DTR data, and produce all visualisations.
 
@@ -757,7 +1014,7 @@ def process_one_prompt(
     n_query = model.model.config.n_query
     layer_indices = getattr(model.model, "routing_layer_indices", None)
 
-    image.save(os.path.join(output_dir, "generated.png"))
+    image.save(os.path.join(output_dir, image_filename))
 
     if ctx.routing_weights is not None:
         plot_dtr_heatmaps(
@@ -787,11 +1044,21 @@ def process_one_prompt(
             save_path=os.path.join(output_dir, "combined.pdf"),
         )
 
+    # Standalone single-checkpoint keyword attention overlay.
+    if keywords and hs is not None and keyword_attention_filename:
+        plot_keyword_attention(
+            image, hs, tokenizer, prompts[0], keywords, n_query,
+            save_path=os.path.join(output_dir, keyword_attention_filename),
+            smooth_sigma_px=smooth_sigma_px,
+        )
+
     return {
         "image": image,
         "routing_weights": ctx.routing_weights,
+        "hs": hs,
         "n_query": n_query,
         "layer_indices": layer_indices,
+        "pos_prompt": prompts[0],
     }
 
 
@@ -838,6 +1105,16 @@ def main():
         "--rebuttal_ids", default="",
         help="Comma-separated prompt ids to include in output_dir/dtr_rebuttal.{pdf,png}.",
     )
+    parser.add_argument(
+        "--baseline_model_path", default=None,
+        help="Optional path to a non-DTR checkpoint with the same architecture. "
+             "When provided, the script runs every prompt twice (same seed) and emits "
+             "a side-by-side keyword attention comparison figure.",
+    )
+    parser.add_argument(
+        "--smooth_sigma_px", type=float, default=8.0,
+        help="Gaussian smoothing sigma (in pixels) applied to keyword attention overlays.",
+    )
     args = parser.parse_args()
 
     if args.prompt is None and args.prompt_json is None:
@@ -846,19 +1123,7 @@ def main():
     focus_layers = [int(x.strip()) for x in args.focus_layers.split(",") if x.strip()]
     rebuttal_ids = [x.strip() for x in args.rebuttal_ids.split(",") if x.strip()]
 
-    # ── Load model (once) ───────────────────────────────
-    disable_torch_init()
-    model_path = os.path.expanduser(args.model_path)
-    model_name = get_model_name_from_path(model_path)
-    print("Loading model ...")
-    tokenizer, model, _ = load_pretrained_model_general(
-        "UniLIP_InternVLForCausalLM", model_path, None, model_name
-    )
-    model.eval()
-    pipe = CustomGenPipeline(multimodal_encoder=model, tokenizer=tokenizer)
-    print("Model loaded.")
-
-    # ── Build job list ──────────────────────────────────
+    # ── Build job list (independent of model loading) ──
     # Each job: (id, prompt_text, keywords_list, per_item_seed)
     jobs: List[tuple] = []
 
@@ -878,33 +1143,70 @@ def main():
         kws = [k.strip() for k in args.keywords.split(",") if k.strip()]
         jobs.append(("single", args.prompt, kws, args.seed))
 
-    # ── Process ─────────────────────────────────────────
     base_dir = args.output_dir
-    summary_records: List[Dict] = []
-    for pid, ptxt, kws, seed in tqdm(jobs, desc="Visualising"):
-        out_dir = os.path.join(base_dir, pid) if len(jobs) > 1 else base_dir
-        os.makedirs(out_dir, exist_ok=True)
-        print(f"\n{'='*60}")
-        print(f"[{pid}] {ptxt[:80]}{'…' if len(ptxt) > 80 else ''}")
-        if kws:
-            print(f"  keywords: {kws}")
-        print(f"  output  : {out_dir}")
+    os.makedirs(base_dir, exist_ok=True)
 
-        rec = process_one_prompt(
-            model, tokenizer, pipe,
-            prompt_text=ptxt,
-            keywords=kws,
-            output_dir=out_dir,
-            guidance_scale=args.guidance_scale,
-            seed=seed,
-            focus_layers=focus_layers,
-            skip_object_regions=args.skip_object_regions,
+    def _run_pass(model_path: str, tag: str) -> Dict[str, Dict]:
+        """Load *model_path*, run all prompts, return {pid: record}.
+
+        *tag* ∈ {"dtr", "base"} controls per-sample output filenames so the two
+        passes never overwrite each other.
+        """
+        disable_torch_init()
+        mp = os.path.expanduser(model_path)
+        mname = get_model_name_from_path(mp)
+        print(f"\n>>> Loading {tag.upper()} model: {mp}")
+        tok, mdl, _ = load_pretrained_model_general(
+            "UniLIP_InternVLForCausalLM", mp, None, mname
         )
-        if rec.get("routing_weights") is not None:
-            rec.update({"id": pid, "prompt": ptxt})
-            if not rebuttal_ids or pid in rebuttal_ids:
-                summary_records.append(rec)
+        mdl.eval()
+        pipe = CustomGenPipeline(multimodal_encoder=mdl, tokenizer=tok)
+        print(f">>> {tag.upper()} model loaded.")
 
+        results: Dict[str, Dict] = {}
+        for pid, ptxt, kws, seed in tqdm(jobs, desc=f"Visualising [{tag}]"):
+            out_dir = os.path.join(base_dir, pid) if len(jobs) > 1 else base_dir
+            os.makedirs(out_dir, exist_ok=True)
+            print(f"\n[{tag}|{pid}] {ptxt[:80]}{'…' if len(ptxt) > 80 else ''}")
+            if kws:
+                print(f"  keywords: {kws}")
+            print(f"  output  : {out_dir}")
+
+            rec = process_one_prompt(
+                mdl, tok, pipe,
+                prompt_text=ptxt,
+                keywords=kws,
+                output_dir=out_dir,
+                guidance_scale=args.guidance_scale,
+                seed=seed,
+                focus_layers=focus_layers,
+                skip_object_regions=args.skip_object_regions,
+                image_filename=f"generated_{tag}.png",
+                smooth_sigma_px=args.smooth_sigma_px,
+                keyword_attention_filename=f"keyword_attention_{tag}.pdf",
+            )
+            rec.update({"id": pid, "prompt": ptxt, "keywords": kws, "tokenizer": tok})
+            results[pid] = rec
+
+        # Free GPU memory before loading the next checkpoint.
+        del mdl, pipe, tok
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        return results
+
+    # ── Pass 1: DTR checkpoint ──────────────────────────
+    dtr_results = _run_pass(args.model_path, "dtr")
+
+    # Single-checkpoint summary figure (pure DTR routing).
+    summary_records: List[Dict] = []
+    for pid, rec in dtr_results.items():
+        if rec.get("routing_weights") is None:
+            continue
+        if rebuttal_ids and pid not in rebuttal_ids:
+            continue
+        summary_records.append(rec)
     if summary_records:
         plot_rebuttal_summary(
             summary_records,
@@ -912,6 +1214,45 @@ def main():
             focus_layers=focus_layers,
             max_rows=len(summary_records),
         )
+
+    # ── Pass 2 (optional): Baseline checkpoint ──────────
+    if args.baseline_model_path:
+        base_results = _run_pass(args.baseline_model_path, "base")
+
+        # Build paired records for the side-by-side comparison.
+        compare_records: List[Dict] = []
+        for pid, dtr_rec in dtr_results.items():
+            if rebuttal_ids and pid not in rebuttal_ids:
+                continue
+            base_rec = base_results.get(pid)
+            if base_rec is None:
+                continue
+            if dtr_rec.get("hs") is None or base_rec.get("hs") is None:
+                continue
+            kws = dtr_rec.get("keywords", [])
+            if not kws:
+                continue
+            compare_records.append({
+                "id": pid,
+                "prompt": dtr_rec["prompt"],
+                "keywords": kws,
+                "image_dtr": dtr_rec["image"],
+                "image_base": base_rec["image"],
+                "hs_dtr": dtr_rec["hs"],
+                "hs_base": base_rec["hs"],
+                "n_query": dtr_rec["n_query"],
+                "tokenizer": dtr_rec["tokenizer"],
+                "pos_prompt": dtr_rec["pos_prompt"],
+            })
+
+        if compare_records:
+            plot_keyword_compare(
+                compare_records,
+                save_path=os.path.join(base_dir, "dtr_vs_baseline_attention.pdf"),
+                smooth_sigma_px=args.smooth_sigma_px,
+            )
+        else:
+            print("No paired records available for DTR vs baseline comparison.")
 
     print(f"\nAll done. Results in {base_dir}")
 
