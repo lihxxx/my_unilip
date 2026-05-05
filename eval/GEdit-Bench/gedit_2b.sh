@@ -1,7 +1,7 @@
 #!/bin/bash
 
 
-MODEL="../../work_dirs/2b_stage3/checkpoint-xxx"
+MODEL="/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/UniLIP-3B"
 CLS_NAME="UniLIP_InternVLForCausalLM"
 METHOD="spar_2b"
 OUTDIR="results"
