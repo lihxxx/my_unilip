@@ -205,6 +205,18 @@ def _single_color_cmap(hex_color: str):
     return mcolors.LinearSegmentedColormap.from_list("c", [(1, 1, 1, 0), rgba], N=256)
 
 
+def _save_fig_dual(fig, save_path: str):
+    """Save a matplotlib figure to BOTH .pdf and .png next to each other.
+
+    The server-side renderers cannot preview .pdf, so we always emit a .png
+    alongside the .pdf for quick inspection. The .pdf remains the authoritative
+    vector copy for the rebuttal.
+    """
+    base, _ = os.path.splitext(save_path)
+    fig.savefig(base + ".pdf", dpi=300, bbox_inches="tight")
+    fig.savefig(base + ".png", dpi=200, bbox_inches="tight")
+
+
 def _upsample_grid(tensor_1d: torch.Tensor, n_query: int, H: int, W: int) -> np.ndarray:
     """Reshape a [N_query] tensor to [H, W] via bilinear upsampling."""
     gs = int(np.sqrt(n_query))
@@ -319,8 +331,8 @@ def plot_dtr_heatmaps(
 
     fig.suptitle("Dynamic Token Routing – Layer Preference", fontsize=15, weight="bold", y=1.02)
     plt.tight_layout()
-    fig.savefig(save_path, dpi=300, bbox_inches="tight")
-    print(f"DTR heatmaps → {save_path}")
+    _save_fig_dual(fig, save_path)
+    print(f"DTR heatmaps → {save_path} (+ .png)")
     plt.close(fig)
 
 
@@ -387,7 +399,7 @@ def plot_object_regions(
 
     fig.suptitle("Text → Image Region Correspondence", fontsize=15, weight="bold", y=1.02)
     plt.tight_layout()
-    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    _save_fig_dual(fig, save_path)
     print(f"Object regions → {save_path}")
     plt.close(fig)
 
@@ -541,7 +553,7 @@ def plot_combined(
 
     fig.suptitle("Dynamic Token Routing Visualisation", fontsize=16, weight="bold", y=1.02)
     plt.tight_layout()
-    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    _save_fig_dual(fig, save_path)
     print(f"Combined figure → {save_path}")
     plt.close(fig)
 

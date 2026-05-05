@@ -6,7 +6,7 @@
 
 # ============== 路径配置 ==============
 export BASE_DIR="/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip"
-MODEL_PATH="${BASE_DIR}/results/unilip_intern_vl_1b_sft_alignment_distill05_D6"
+MODEL_PATH="${BASE_DIR}/results/unilip_intern_vl_1b_sft_alignment_distill05_D6_dynamic6/checkpoint-2385"
 PROMPT_JSON="${BASE_DIR}/prompts_vis.json"
 OUTPUT_DIR="${BASE_DIR}/results/vis_dtr"
 
