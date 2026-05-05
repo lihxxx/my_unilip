@@ -30,7 +30,10 @@ DTR_CKPT="${DTR_CKPT:-/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/m
 OUT_ROOT="${OUT_ROOT:-results/vis_edit_compare}"
 
 # ─────────────────── Knobs ───────────────────
-LANGUAGE="${LANGUAGE:-en}"
+# NOTE: do NOT use the bare name LANGUAGE — it collides with the POSIX locale
+# env var (e.g. LANGUAGE=en_US:en on most systems), which would silently
+# override our default and break --language. Use a script-private name.
+GEDIT_LANGUAGE="${GEDIT_LANGUAGE:-en}"
 SEED="${SEED:-42}"
 GUIDANCE_SCALE="${GUIDANCE_SCALE:-4.5}"
 MAX_CASES="${MAX_CASES:-0}"          # 0 = full set
@@ -48,7 +51,7 @@ COMMON_GEN_ARGS=(
   --baseline_model_path "${BASE_CKPT}"
   --dtr_model_path      "${DTR_CKPT}"
   --out_root            "${OUT_ROOT}"
-  --language            "${LANGUAGE}"
+  --language            "${GEDIT_LANGUAGE}"
   --seed                "${SEED}"
   --guidance_scale      "${GUIDANCE_SCALE}"
   --step_window         "${STEP_WINDOW}"
@@ -58,7 +61,7 @@ COMMON_GEN_ARGS=(
 
 run_generate() {
   echo "============================================================"
-  echo "[STAGE: generate] full GEdit-Bench ${LANGUAGE}, both ckpts, NO capture"
+  echo "[STAGE: generate] full GEdit-Bench ${GEDIT_LANGUAGE}, both ckpts, NO capture"
   echo "============================================================"
   mkdir -p "${OUT_ROOT}"
   python -u scripts/visualize_edit_compare.py "${COMMON_GEN_ARGS[@]}"
@@ -70,7 +73,7 @@ run_score() {
   echo "============================================================"
   python -u scripts/score_edit_compare.py \
     --out_root "${OUT_ROOT}" \
-    --language "${LANGUAGE}" \
+    --language "${GEDIT_LANGUAGE}" \
     --top_k    "${TOP_K}" \
     --qwen_seed 42 \
     --qwen_model "Qwen/Qwen2.5-VL-72B-Instruct-AWQ"
