@@ -79,11 +79,13 @@ PALETTE = [
 # Hook-based capture context
 # ────────────────────────────────────────────────────────────
 class DTRCaptureContext:
-    """Context manager that monkey-patches the DynamicTokenRouter to capture
-    routing weights and fused hidden states during a single generation call.
-
-    Also places a forward hook on the LLM backbone so that text-visual
-    similarity can be computed even when DTR is disabled.
+    """Context manager that captures, in a single generation call:
+        • DTR router outputs (routing_weights + fused_hidden), if present.
+        • LLM backbone last hidden state (fallback similarity source).
+        • Per-layer self-attention weights from the bidirectional `llm_connector`
+          (the module where visual queries actually attend to text tokens).
+        • The `attention_mask` fed into the connector, so we can split
+          text vs visual-query positions afterwards.
     """
 
     def __init__(self, model):
@@ -92,22 +94,30 @@ class DTRCaptureContext:
         self.fused_hidden: Optional[torch.Tensor] = None     # [B, N, D]
         self.last_hidden: Optional[torch.Tensor] = None      # [B, N, D]
 
+        # connector_attentions[layer_idx] : Tensor [B, heads, seq, seq]  (cpu)
+        self.connector_attentions: List[torch.Tensor] = []
+        # bool mask [B, seq] from the connector's attention_mask input.
+        self.connector_token_mask: Optional[torch.Tensor] = None
+
         self._has_router = (
             getattr(model.model.config, "enable_dynamic_routing", False)
             and hasattr(model.model, "dynamic_router")
         )
-        self._orig_fwd = None
+        self._orig_router_fwd = None
+        self._orig_connector_fwd = None
         self._llm_hook_handle = None
+        self._attn_hook_handles: List = []
 
     # ── enter / exit ──────────────────────────────────────
     def __enter__(self):
+        ctx = self
+
         # Hook 1: replace DynamicTokenRouter.forward
         if self._has_router:
             router = self.model.model.dynamic_router
-            self._orig_fwd = router.forward
-            ctx = self
+            self._orig_router_fwd = router.forward
 
-            def _capturing_forward(selected_hiddens):
+            def _capturing_router_forward(selected_hiddens):
                 stacked = torch.stack(selected_hiddens, dim=-2)
                 scaled = stacked * router.layer_scales.view(1, 1, -1, 1)
                 query = selected_hiddens[-1]
@@ -121,11 +131,9 @@ class DTRCaptureContext:
                 ctx.fused_hidden = result.detach().cpu()
                 return result
 
-            router.forward = _capturing_forward
+            router.forward = _capturing_router_forward
 
-        # Hook 2: LLM output → last hidden state (fallback for non-DTR models)
-        ctx_ref = self
-
+        # Hook 2: main LLM output → last hidden state (similarity fallback).
         def _llm_hook(module, input, output):
             hs = getattr(output, "hidden_states", None)
             if hs is None and isinstance(output, tuple):
@@ -134,21 +142,80 @@ class DTRCaptureContext:
                         hs = item
                         break
             if hs is not None and len(hs) > 0:
-                ctx_ref.last_hidden = hs[-1].detach().cpu()
+                ctx.last_hidden = hs[-1].detach().cpu()
 
         self._llm_hook_handle = self.model.model.language_model.register_forward_hook(_llm_hook)
+
+        # Hook 3 + 4: monkey-patch llm_connector.forward to force
+        # output_attentions=True, and snoop attention_mask to recover the
+        # text/visual-query token split. Then attach a forward hook on every
+        # connector layer's self_attn that records its attn_weights.
+        connector = getattr(self.model.model, "llm_connector", None)
+        if connector is not None:
+            self._orig_connector_fwd = connector.forward
+
+            def _capturing_connector_forward(*args, **kwargs):
+                # Snoop attention_mask before the call (handles both positional
+                # and keyword forms).
+                attn_mask = kwargs.get("attention_mask", None)
+                if attn_mask is None and len(args) >= 2:
+                    attn_mask = args[1]
+                if attn_mask is not None:
+                    if attn_mask.dtype == torch.bool:
+                        ctx.connector_token_mask = attn_mask.detach().cpu()
+                    elif attn_mask.dim() == 2:
+                        ctx.connector_token_mask = (attn_mask > 0).detach().cpu()
+                    elif attn_mask.dim() == 4:
+                        # [B,1,seq,seq] additive mask: a token is valid iff its
+                        # diagonal entry is ≥ 0 (i.e. not masked).
+                        diag = attn_mask[:, 0].diagonal(dim1=-2, dim2=-1)
+                        ctx.connector_token_mask = (diag >= -1.0).detach().cpu()
+
+                # Reset on every call, so we keep only the most recent forward.
+                ctx.connector_attentions = []
+                kwargs["output_attentions"] = True
+                return ctx._orig_connector_fwd(*args, **kwargs)
+
+            connector.forward = _capturing_connector_forward
+
+            def _make_attn_hook(layer_idx: int):
+                def _attn_hook(module, inputs, output):
+                    # eager-mode HF self_attn returns
+                    #   (attn_output, attn_weights[, past_kv]).
+                    if isinstance(output, tuple) and len(output) >= 2 and isinstance(output[1], torch.Tensor):
+                        ctx.connector_attentions.append(output[1].detach().to("cpu", torch.float32))
+                return _attn_hook
+
+            for li, layer in enumerate(connector.layers):
+                attn_module = getattr(layer, "self_attn", None)
+                if attn_module is None:
+                    continue
+                handle = attn_module.register_forward_hook(_make_attn_hook(li))
+                self._attn_hook_handles.append(handle)
+
         return self
 
     def __exit__(self, *exc):
-        if self._has_router and self._orig_fwd is not None:
-            self.model.model.dynamic_router.forward = self._orig_fwd
+        if self._has_router and self._orig_router_fwd is not None:
+            self.model.model.dynamic_router.forward = self._orig_router_fwd
         if self._llm_hook_handle is not None:
             self._llm_hook_handle.remove()
+        if self._orig_connector_fwd is not None:
+            self.model.model.llm_connector.forward = self._orig_connector_fwd
+        for h in self._attn_hook_handles:
+            h.remove()
+        self._attn_hook_handles = []
 
     @property
     def hidden_for_similarity(self) -> Optional[torch.Tensor]:
         """Best available hidden states: routed > last-layer."""
         return self.fused_hidden if self.fused_hidden is not None else self.last_hidden
+
+    def stacked_attentions(self) -> Optional[torch.Tensor]:
+        """[L, B, H, S, S] tensor of all connector self-attention layers, or None."""
+        if not self.connector_attentions:
+            return None
+        return torch.stack(self.connector_attentions, dim=0)
 
 
 # ────────────────────────────────────────────────────────────
@@ -375,6 +442,227 @@ def _focus_score(grid: np.ndarray, top_frac: float = 0.1) -> float:
     top_mean = float(np.sort(flat)[-k:].mean())
     overall_mean = float(flat.mean())
     return top_mean - overall_mean
+
+
+# ────────────────────────────────────────────────────────────
+# Attention rollout (Abnar & Zuidema 2020) for VLM-style maps
+# ────────────────────────────────────────────────────────────
+def _compute_attention_rollout(
+    connector_attentions: torch.Tensor,
+    sample_idx: int = 0,
+    head_reduce: str = "mean",
+    add_residual: bool = True,
+) -> Optional[torch.Tensor]:
+    """Compute the attention rollout matrix for one sample.
+
+    Rollout (Abnar & Zuidema 2020):
+        A_l = 0.5 * attn_l + 0.5 * I     # account for residual stream
+        rollout = A_L @ A_{L-1} @ ... @ A_1
+    Each row is re-normalised to sum to 1.
+
+    Args
+    ----
+    connector_attentions : Tensor[L, B, H, S, S]
+    sample_idx : which batch element (0 = positive prompt).
+    head_reduce : 'mean' or 'max' across heads.
+
+    Returns
+    -------
+    Tensor[S, S] of float32 on CPU, or None if input is empty.
+    """
+    if connector_attentions is None or connector_attentions.numel() == 0:
+        return None
+    L, B, H, S, _ = connector_attentions.shape
+    a = connector_attentions[:, sample_idx]       # [L, H, S, S]
+    if head_reduce == "max":
+        a = a.amax(dim=1)                          # [L, S, S]
+    else:
+        a = a.mean(dim=1)                          # [L, S, S]
+
+    # Residual identity (each token always attends to itself).
+    eye = torch.eye(S, dtype=a.dtype)
+    rollout = eye.clone()
+    for l in range(L):
+        layer = a[l]
+        if add_residual:
+            layer = 0.5 * layer + 0.5 * eye
+            # Re-normalise rows after adding identity (probabilities again).
+            layer = layer / layer.sum(dim=-1, keepdim=True).clamp(min=1e-9)
+        rollout = layer @ rollout
+    # Final normalisation per row.
+    rollout = rollout / rollout.sum(dim=-1, keepdim=True).clamp(min=1e-9)
+    return rollout
+
+
+def _extract_keyword_rollout_grids(
+    rollout: torch.Tensor,
+    token_mask: Optional[torch.Tensor],
+    tokenizer,
+    pos_prompt: str,
+    keywords: List[str],
+    n_query: int,
+    sample_idx: int = 0,
+) -> Dict[str, np.ndarray]:
+    """Per-keyword visual-query → keyword-text rollout heatmap (gs × gs)."""
+    if rollout is None:
+        return {}
+    S = rollout.shape[0]
+    if token_mask is not None:
+        valid = token_mask[sample_idx].bool()
+        valid_len = int(valid.sum().item())
+    else:
+        valid_len = S
+    n_text = valid_len - n_query
+    if n_text <= 0:
+        return {}
+
+    visual_to_text = rollout[n_text:n_text + n_query, :n_text]   # [n_query, n_text]
+    gs = int(np.sqrt(n_query))
+
+    grids: Dict[str, np.ndarray] = {}
+    for kw in keywords:
+        pos = find_keyword_token_positions(tokenizer, pos_prompt, kw)
+        pos = [p for p in pos if 0 <= p < n_text]
+        if not pos:
+            continue
+        kw_mass = visual_to_text[:, pos].sum(dim=-1)             # [n_query]
+        grids[kw] = kw_mass.view(gs, gs).float().numpy()
+    return grids
+
+
+def plot_attention_rollout(
+    image: Image.Image,
+    connector_attentions: torch.Tensor,
+    token_mask: Optional[torch.Tensor],
+    tokenizer,
+    pos_prompt: str,
+    keywords: List[str],
+    n_query: int,
+    save_path: str,
+    smooth_sigma_px: float = 4.0,
+    head_reduce: str = "mean",
+):
+    """Single-checkpoint VLM-style figure: generated image + per-keyword rollout overlays."""
+    if connector_attentions is None or not keywords:
+        return
+    rollout = _compute_attention_rollout(
+        connector_attentions, sample_idx=0, head_reduce=head_reduce, add_residual=True
+    )
+    grids = _extract_keyword_rollout_grids(
+        rollout, token_mask, tokenizer, pos_prompt, keywords, n_query, sample_idx=0
+    )
+    if not grids:
+        print(f"No keyword survived tokenisation; skip rollout figure ({pos_prompt[:40]}…)")
+        return
+
+    img_np = np.array(image)
+    H, W = img_np.shape[:2]
+    nk = len(grids)
+    fig, axes = plt.subplots(1, nk + 1, figsize=(2.5 * (nk + 1), 2.7))
+    if nk == 0:
+        axes = [axes]
+
+    axes[0].imshow(img_np)
+    axes[0].set_title("Generated", weight="bold", fontsize=10)
+    axes[0].axis("off")
+
+    for ax, (kw, grid) in zip(axes[1:], grids.items()):
+        attn = _normalise_attention(grid, (H, W), smooth_sigma_px)
+        focus = _focus_score(grid)
+        ax.imshow(img_np, alpha=0.45)
+        ax.imshow(attn, cmap="turbo", alpha=0.65, vmin=0, vmax=1)
+        ax.set_title(f'"{kw}"\nfocus={focus:+.3f}', weight="bold", fontsize=10)
+        ax.axis("off")
+
+    fig.text(
+        0.5, 0.01,
+        "Attention rollout (Abnar & Zuidema 2020) over connector self-attention layers, "
+        "visual query → keyword text token. Higher 'focus' = sharper localisation.",
+        ha="center", fontsize=8, color="#444444",
+    )
+    plt.tight_layout(rect=(0, 0.05, 1, 1))
+    _save_fig_dual(fig, save_path)
+    print(f"Attention rollout → {save_path} (+ .png)")
+    plt.close(fig)
+
+
+# ────────────────────────────────────────────────────────────
+# Real cross-attention extraction (visual queries → text tokens)
+# ────────────────────────────────────────────────────────────
+def _extract_keyword_cross_attention_grids(
+    connector_attentions: torch.Tensor,
+    token_mask: Optional[torch.Tensor],
+    tokenizer,
+    pos_prompt: str,
+    keywords: List[str],
+    n_query: int,
+    sample_idx: int = 0,
+    layer_range: Optional[tuple] = None,
+) -> Dict[str, np.ndarray]:
+    """Average cross-attention from every visual query token to each keyword's
+    text token positions, taken from the bidirectional `llm_connector`.
+
+    Args
+    ----
+    connector_attentions : Tensor[L, B, H, S, S]
+        Stacked self-attention weights from each connector layer.
+    token_mask : Tensor[B, S] of bool, or None
+        True for valid tokens; visual queries occupy the last `n_query` valid
+        positions. If None, we assume no padding.
+    sample_idx : int
+        Which batch element to use (0 = positive prompt, 1 = unconditional).
+    layer_range : (lo, hi) inclusive layer indices to average. None → all layers.
+
+    Returns
+    -------
+    {keyword: ndarray[gs, gs]}  raw attention probabilities (sum to 1 along key
+    axis); larger = stronger attention to that keyword.
+    """
+    if connector_attentions is None:
+        return {}
+    L = connector_attentions.shape[0]
+    if layer_range is None:
+        lo, hi = 0, L - 1
+    else:
+        lo, hi = layer_range
+        lo = max(0, min(L - 1, lo))
+        hi = max(0, min(L - 1, hi))
+    if lo > hi:
+        lo, hi = hi, lo
+    # Average across selected layers and heads → [B, S, S]
+    attn = connector_attentions[lo : hi + 1].mean(dim=0)  # [B, H, S, S]
+    attn = attn.mean(dim=1)                                # [B, S, S]
+    a = attn[sample_idx]                                   # [S, S]
+
+    S = a.shape[0]
+    if token_mask is not None:
+        valid = token_mask[sample_idx].bool()
+        valid_len = int(valid.sum().item())
+    else:
+        valid_len = S
+
+    # Visual queries occupy the LAST n_query valid positions; text precedes.
+    n_text = valid_len - n_query
+    if n_text <= 0:
+        return {}
+
+    # Restrict to valid portion (drop padded rows/cols).
+    a = a[:valid_len, :valid_len]                          # [valid_len, valid_len]
+    visual_q = a[n_text:n_text + n_query, :n_text]         # [n_query, n_text]
+    gs = int(np.sqrt(n_query))
+
+    grids: Dict[str, np.ndarray] = {}
+    for kw in keywords:
+        pos = find_keyword_token_positions(tokenizer, pos_prompt, kw)
+        if not pos:
+            continue
+        pos = [p for p in pos if 0 <= p < n_text]
+        if not pos:
+            continue
+        # Sum attention probability mass that visual queries put on this kw.
+        kw_attn = visual_q[:, pos].sum(dim=-1)             # [n_query]
+        grids[kw] = kw_attn.view(gs, gs).numpy()
+    return grids
 
 
 # ────────────────────────────────────────────────────────────
@@ -619,6 +907,214 @@ def plot_keyword_attention(
     plt.tight_layout()
     _save_fig_dual(fig, save_path)
     print(f"Keyword attention → {save_path} (+ .png)")
+    plt.close(fig)
+
+
+def plot_cross_attention_compare(
+    records: List[Dict],
+    save_path: str,
+    max_keywords_per_sample: int = 2,
+    smooth_sigma_px: float = 6.0,
+    layer_range: Optional[tuple] = None,
+    label_dtr: str = "w/ DTR",
+    label_base: str = "w/o DTR",
+):
+    """Side-by-side **real** cross-attention overlay (DTR vs baseline).
+
+    Each record must contain:
+        id, prompt, keywords, image_dtr, image_base,
+        attn_dtr, mask_dtr, attn_base, mask_base,
+        n_query, tokenizer, pos_prompt
+    where attn_* is a Tensor[L, B, H, S, S] and mask_* is Tensor[B, S] (bool).
+    """
+    if not records:
+        return
+
+    # Resolve per-row valid keywords using DTR-side attention.
+    resolved: List[List[str]] = []
+    for rec in records:
+        kws = rec.get("keywords", [])
+        grids = _extract_keyword_cross_attention_grids(
+            rec["attn_dtr"], rec["mask_dtr"], rec["tokenizer"], rec["pos_prompt"],
+            kws, rec["n_query"], sample_idx=0, layer_range=layer_range,
+        )
+        valid = [kw for kw in kws if kw in grids][:max_keywords_per_sample]
+        resolved.append(valid)
+
+    max_kw = max((len(v) for v in resolved), default=0)
+    if max_kw == 0:
+        print("No keyword survived tokenisation; skipping cross-attention compare figure.")
+        return
+
+    nrows = len(records)
+    ncols = 2 + 2 * max_kw  # gen-DTR | gen-Base | (kw DTR | kw Base) × max_kw
+    fig, axes = plt.subplots(nrows, ncols, figsize=(1.95 * ncols, 2.0 * nrows))
+    if nrows == 1:
+        axes = np.array([axes])
+    if ncols == 1:
+        axes = axes.reshape(nrows, 1)
+
+    headers = [f"Generated\n{label_dtr}", f"Generated\n{label_base}"]
+    for slot in range(max_kw):
+        headers.append(f"kw{slot + 1}\n{label_dtr}")
+        headers.append(f"kw{slot + 1}\n{label_base}")
+    for ax, header in zip(axes[0], headers):
+        ax.set_title(header, fontsize=9.5, weight="bold", pad=4)
+
+    for row, (rec, valid_kws) in enumerate(zip(records, resolved)):
+        img_d = np.array(rec["image_dtr"])
+        img_b = np.array(rec["image_base"])
+        Hd, Wd = img_d.shape[:2]
+        Hb, Wb = img_b.shape[:2]
+
+        ax = axes[row, 0]
+        ax.imshow(img_d)
+        ax.set_ylabel(
+            f"{rec.get('id', row + 1)}\n{textwrap.shorten(rec.get('prompt',''), width=22, placeholder='...')}",
+            rotation=0, ha="right", va="center", fontsize=8,
+        )
+        ax.axis("off")
+
+        ax = axes[row, 1]
+        ax.imshow(img_b)
+        ax.axis("off")
+
+        grids_d = _extract_keyword_cross_attention_grids(
+            rec["attn_dtr"], rec["mask_dtr"], rec["tokenizer"], rec["pos_prompt"],
+            valid_kws, rec["n_query"], sample_idx=0, layer_range=layer_range,
+        )
+        grids_b = _extract_keyword_cross_attention_grids(
+            rec["attn_base"], rec["mask_base"], rec["tokenizer"], rec["pos_prompt"],
+            valid_kws, rec["n_query"], sample_idx=0, layer_range=layer_range,
+        )
+
+        for slot in range(max_kw):
+            col_d = 2 + 2 * slot
+            col_b = col_d + 1
+            ax_d = axes[row, col_d]
+            ax_b = axes[row, col_b]
+
+            if slot >= len(valid_kws):
+                ax_d.set_visible(False)
+                ax_b.set_visible(False)
+                continue
+            kw = valid_kws[slot]
+
+            if kw in grids_d:
+                attn = _normalise_attention(grids_d[kw], (Hd, Wd), smooth_sigma_px)
+                ax_d.imshow(img_d, alpha=0.4)
+                ax_d.imshow(attn, cmap="turbo", alpha=0.7, vmin=0, vmax=1)
+                ax_d.text(
+                    0.02, 0.96, f'"{kw}"  focus {_focus_score(grids_d[kw]):+.3f}',
+                    transform=ax_d.transAxes, ha="left", va="top", fontsize=7,
+                    bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", pad=1.5),
+                )
+            else:
+                ax_d.imshow(img_d)
+            ax_d.axis("off")
+
+            if kw in grids_b:
+                attn = _normalise_attention(grids_b[kw], (Hb, Wb), smooth_sigma_px)
+                ax_b.imshow(img_b, alpha=0.4)
+                ax_b.imshow(attn, cmap="turbo", alpha=0.7, vmin=0, vmax=1)
+                ax_b.text(
+                    0.02, 0.96, f'"{kw}"  focus {_focus_score(grids_b[kw]):+.3f}',
+                    transform=ax_b.transAxes, ha="left", va="top", fontsize=7,
+                    bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", pad=1.5),
+                )
+            else:
+                ax_b.imshow(img_b)
+            ax_b.axis("off")
+
+    layer_str = "all layers" if layer_range is None else f"layers {layer_range[0]}-{layer_range[1]}"
+    fig.text(
+        0.5, 0.005,
+        f"Real cross-attention from visual queries to keyword text tokens "
+        f"(connector self-attn, head-mean over {layer_str}). "
+        f"Higher 'focus' (top-10% mean − overall mean) = sharper localisation.",
+        ha="center", fontsize=8, color="#444444",
+    )
+    plt.tight_layout(rect=(0, 0.025, 1, 1))
+    _save_fig_dual(fig, save_path)
+    print(f"DTR vs baseline cross-attention → {save_path} (+ .png)")
+    plt.close(fig)
+
+
+def plot_routing_only_compare(
+    records: List[Dict],
+    save_path: str,
+    focus_layers: Optional[List[int]] = None,
+    max_layers: int = 2,
+):
+    """Compact figure showing **only** DTR routing maps next to baseline image.
+
+    Use this when the cross-attention story is hard to read; it makes a weaker
+    but unambiguous claim ("DTR performs spatially adaptive layer selection").
+
+    Each record needs: id, prompt, image_dtr, image_base, routing_weights, n_query,
+    layer_indices.
+    """
+    if not records:
+        return
+
+    # Pick layers from the first record (consistent columns across rows).
+    first = records[0]
+    img0 = np.array(first["image_dtr"])
+    vis_w0, _ = _routing_layer_maps(first["routing_weights"], first["n_query"], img0.shape[:2])
+    selected = _select_focus_indices(vis_w0, first.get("layer_indices"), focus_layers, max_layers=max_layers)
+    names = _format_layer_names(vis_w0.shape[1], first.get("layer_indices"))
+
+    nrows = len(records)
+    ncols = 2 + len(selected)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(1.95 * ncols, 2.0 * nrows))
+    if nrows == 1:
+        axes = np.array([axes])
+    if ncols == 1:
+        axes = axes.reshape(nrows, 1)
+
+    headers = ["Generated\nw/ DTR", "Generated\nw/o DTR"] + [f"Routing\n{names[i]}" for i in selected]
+    for ax, header in zip(axes[0], headers):
+        ax.set_title(header, fontsize=9.5, weight="bold", pad=4)
+
+    for row, rec in enumerate(records):
+        img_d = np.array(rec["image_dtr"])
+        img_b = np.array(rec["image_base"])
+        Hd, Wd = img_d.shape[:2]
+
+        ax = axes[row, 0]
+        ax.imshow(img_d)
+        ax.set_ylabel(
+            f"{rec.get('id', row + 1)}\n{textwrap.shorten(rec.get('prompt',''), width=22, placeholder='...')}",
+            rotation=0, ha="right", va="center", fontsize=8,
+        )
+        ax.axis("off")
+
+        ax = axes[row, 1]
+        ax.imshow(img_b)
+        ax.axis("off")
+
+        vis_w, up = _routing_layer_maps(rec["routing_weights"], rec["n_query"], (Hd, Wd))
+        for col_off, idx in enumerate(selected):
+            ax = axes[row, 2 + col_off]
+            layer_map = _relative_map(up[idx])
+            ax.imshow(img_d, alpha=0.36)
+            ax.imshow(layer_map, cmap="turbo", alpha=0.72, vmin=0, vmax=1)
+            ax.text(
+                0.02, 0.96, f"mean {vis_w[:, idx].mean().item():.2f}",
+                transform=ax.transAxes, ha="left", va="top", fontsize=7,
+                bbox=dict(facecolor="white", alpha=0.7, edgecolor="none", pad=1.5),
+            )
+            ax.axis("off")
+
+    fig.text(
+        0.5, 0.005,
+        "DTR routing weights (right) act as a spatially adaptive layer selector. "
+        "Baseline (col 2) lacks this mechanism and uses only the last LLM layer.",
+        ha="center", fontsize=8, color="#444444",
+    )
+    plt.tight_layout(rect=(0, 0.025, 1, 1))
+    _save_fig_dual(fig, save_path)
+    print(f"Routing-only compare → {save_path} (+ .png)")
     plt.close(fig)
 
 
@@ -1044,11 +1540,24 @@ def process_one_prompt(
             save_path=os.path.join(output_dir, "combined.pdf"),
         )
 
-    # Standalone single-checkpoint keyword attention overlay.
+    # Standalone single-checkpoint keyword attention overlay (cosine, kept for ref).
     if keywords and hs is not None and keyword_attention_filename:
         plot_keyword_attention(
             image, hs, tokenizer, prompts[0], keywords, n_query,
             save_path=os.path.join(output_dir, keyword_attention_filename),
+            smooth_sigma_px=smooth_sigma_px,
+        )
+
+    # VLM-style attention rollout (the real money figure).
+    stacked_attn = ctx.stacked_attentions()
+    if keywords and stacked_attn is not None:
+        rollout_filename = f"rollout_{os.path.splitext(image_filename)[0].replace('generated_', '')}.pdf"
+        if rollout_filename in ("rollout_.pdf",):
+            rollout_filename = "rollout_attention.pdf"
+        plot_attention_rollout(
+            image, stacked_attn, ctx.connector_token_mask,
+            tokenizer, prompts[0], keywords, n_query,
+            save_path=os.path.join(output_dir, rollout_filename),
             smooth_sigma_px=smooth_sigma_px,
         )
 
@@ -1059,6 +1568,8 @@ def process_one_prompt(
         "n_query": n_query,
         "layer_indices": layer_indices,
         "pos_prompt": prompts[0],
+        "connector_attentions": stacked_attn,
+        "connector_token_mask": ctx.connector_token_mask,
     }
 
 
@@ -1185,7 +1696,9 @@ def main():
                 smooth_sigma_px=args.smooth_sigma_px,
                 keyword_attention_filename=f"keyword_attention_{tag}.pdf",
             )
-            rec.update({"id": pid, "prompt": ptxt, "keywords": kws, "tokenizer": tok})
+            rec.update({
+                "id": pid, "prompt": ptxt, "keywords": kws, "tokenizer": tok,
+            })
             results[pid] = rec
 
         # Free GPU memory before loading the next checkpoint.
@@ -1219,40 +1732,90 @@ def main():
     if args.baseline_model_path:
         base_results = _run_pass(args.baseline_model_path, "base")
 
-        # Build paired records for the side-by-side comparison.
-        compare_records: List[Dict] = []
+        # Build paired records for the side-by-side comparisons.
+        compare_records: List[Dict] = []   # for cosine-based plot (kept for ref)
+        crossattn_records: List[Dict] = [] # for real cross-attention plot
+        routing_records: List[Dict] = []   # for routing-only plot
         for pid, dtr_rec in dtr_results.items():
             if rebuttal_ids and pid not in rebuttal_ids:
                 continue
             base_rec = base_results.get(pid)
             if base_rec is None:
                 continue
-            if dtr_rec.get("hs") is None or base_rec.get("hs") is None:
-                continue
             kws = dtr_rec.get("keywords", [])
-            if not kws:
-                continue
-            compare_records.append({
+
+            common = {
                 "id": pid,
                 "prompt": dtr_rec["prompt"],
                 "keywords": kws,
                 "image_dtr": dtr_rec["image"],
                 "image_base": base_rec["image"],
-                "hs_dtr": dtr_rec["hs"],
-                "hs_base": base_rec["hs"],
                 "n_query": dtr_rec["n_query"],
                 "tokenizer": dtr_rec["tokenizer"],
                 "pos_prompt": dtr_rec["pos_prompt"],
-            })
+            }
+
+            # Legacy cosine compare (kept for diagnostic reference).
+            if kws and dtr_rec.get("hs") is not None and base_rec.get("hs") is not None:
+                compare_records.append({
+                    **common,
+                    "hs_dtr": dtr_rec["hs"],
+                    "hs_base": base_rec["hs"],
+                })
+
+            # Primary figure: real cross-attention.
+            if (kws
+                    and dtr_rec.get("connector_attentions") is not None
+                    and base_rec.get("connector_attentions") is not None):
+                crossattn_records.append({
+                    **common,
+                    "attn_dtr": dtr_rec["connector_attentions"],
+                    "mask_dtr": dtr_rec["connector_token_mask"],
+                    "attn_base": base_rec["connector_attentions"],
+                    "mask_base": base_rec["connector_token_mask"],
+                })
+
+            # Routing-only fallback figure.
+            if dtr_rec.get("routing_weights") is not None:
+                routing_records.append({
+                    **common,
+                    "routing_weights": dtr_rec["routing_weights"],
+                    "layer_indices": dtr_rec.get("layer_indices"),
+                })
+
+        if crossattn_records:
+            # Last few connector layers usually carry the cleanest signal.
+            n_layers = crossattn_records[0]["attn_dtr"].shape[0]
+            layer_range = (max(0, n_layers - 3), n_layers - 1)
+            plot_cross_attention_compare(
+                crossattn_records,
+                save_path=os.path.join(base_dir, "cross_attention_compare.pdf"),
+                smooth_sigma_px=args.smooth_sigma_px,
+                layer_range=layer_range,
+            )
+            plot_cross_attention_compare(
+                crossattn_records,
+                save_path=os.path.join(base_dir, "cross_attention_compare_alllayers.pdf"),
+                smooth_sigma_px=args.smooth_sigma_px,
+                layer_range=None,
+            )
+        else:
+            print("No connector-attention records available for cross-attention compare.")
+
+        if routing_records:
+            plot_routing_only_compare(
+                routing_records,
+                save_path=os.path.join(base_dir, "routing_only_compare.pdf"),
+                focus_layers=focus_layers,
+                max_layers=2,
+            )
 
         if compare_records:
             plot_keyword_compare(
                 compare_records,
-                save_path=os.path.join(base_dir, "dtr_vs_baseline_attention.pdf"),
+                save_path=os.path.join(base_dir, "dtr_vs_baseline_cosine.pdf"),
                 smooth_sigma_px=args.smooth_sigma_px,
             )
-        else:
-            print("No paired records available for DTR vs baseline comparison.")
 
     print(f"\nAll done. Results in {base_dir}")
 
