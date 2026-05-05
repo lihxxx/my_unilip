@@ -41,6 +41,7 @@ import sys
 import json
 import random
 import argparse
+import textwrap
 from typing import List, Optional, Dict
 
 import numpy as np
@@ -217,6 +218,62 @@ def _save_fig_dual(fig, save_path: str):
     fig.savefig(base + ".png", dpi=200, bbox_inches="tight")
 
 
+def _format_layer_names(K: int, layer_indices: Optional[List[int]] = None) -> List[str]:
+    if layer_indices:
+        return [f"Layer {int(idx)}" for idx in layer_indices]
+    return [f"Layer {i + 1}" for i in range(K)]
+
+
+def _select_focus_indices(
+    vis_w: torch.Tensor,
+    layer_indices: Optional[List[int]],
+    focus_layers: Optional[List[int]],
+    max_layers: int = 2,
+) -> List[int]:
+    """Choose a small set of layers for compact paper figures.
+
+    If explicit layer ids are supplied, match them against the real routing
+    layer ids. Otherwise use the layers with the largest spatial variation;
+    those usually produce the most readable routing maps.
+    """
+    K = vis_w.shape[1]
+    if focus_layers:
+        layer_values = [int(x) for x in layer_indices] if layer_indices else list(range(1, K + 1))
+        selected = []
+        for wanted in focus_layers:
+            if wanted in layer_values:
+                selected.append(layer_values.index(wanted))
+            elif 0 <= wanted < K:
+                selected.append(wanted)
+            elif 1 <= wanted <= K:
+                selected.append(wanted - 1)
+        selected = list(dict.fromkeys(i for i in selected if 0 <= i < K))
+        if selected:
+            return selected[:max_layers]
+
+    variation = vis_w.float().std(dim=0)
+    return torch.argsort(variation, descending=True)[:max_layers].tolist()
+
+
+def _relative_map(weight_map: np.ndarray) -> np.ndarray:
+    lo, hi = np.percentile(weight_map, [2, 98])
+    return np.clip((weight_map - lo) / (hi - lo + 1e-8), 0, 1)
+
+
+def _routing_layer_maps(
+    routing_weights: torch.Tensor,
+    n_query: int,
+    image_hw: tuple,
+) -> tuple[torch.Tensor, np.ndarray]:
+    vis_w = routing_weights[0, -n_query:].float()  # [N_query, K]
+    K = vis_w.shape[1]
+    gs = int(np.sqrt(n_query))
+    H, W = image_hw
+    grid = vis_w.view(gs, gs, K).permute(2, 0, 1).unsqueeze(0)
+    up = F.interpolate(grid, (H, W), mode="bilinear", align_corners=False).squeeze(0).numpy()
+    return vis_w, up
+
+
 def _upsample_grid(tensor_1d: torch.Tensor, n_query: int, H: int, W: int) -> np.ndarray:
     """Reshape a [N_query] tensor to [H, W] via bilinear upsampling."""
     gs = int(np.sqrt(n_query))
@@ -333,6 +390,117 @@ def plot_dtr_heatmaps(
     plt.tight_layout()
     _save_fig_dual(fig, save_path)
     print(f"DTR heatmaps → {save_path} (+ .png)")
+    plt.close(fig)
+
+
+def plot_dtr_focus(
+    image: Image.Image,
+    routing_weights: torch.Tensor,
+    n_query: int,
+    layer_indices: Optional[List[int]] = None,
+    focus_layers: Optional[List[int]] = None,
+    save_path: str = "dtr_focus.pdf",
+    title: str = "Compact DTR Routing",
+):
+    """Compact, rebuttal-friendly DTR visualisation for one sample.
+
+    This intentionally omits text-object correspondence maps because those are
+    only a hidden-state similarity proxy and tend to create noisy pseudo-masks.
+    """
+    img_np = np.array(image)
+    H, W = img_np.shape[:2]
+    vis_w, up = _routing_layer_maps(routing_weights, n_query, (H, W))
+    K = vis_w.shape[1]
+    names = _format_layer_names(K, layer_indices)
+    selected = _select_focus_indices(vis_w, layer_indices, focus_layers, max_layers=2)
+
+    ncols = 1 + len(selected)
+    fig, axes = plt.subplots(1, ncols, figsize=(2.15 * ncols, 2.45))
+    if ncols == 1:
+        axes = [axes]
+
+    axes[0].imshow(img_np)
+    axes[0].set_title("Generated", weight="bold", fontsize=10)
+    axes[0].axis("off")
+
+    for ax, idx in zip(axes[1:], selected):
+        layer_map = _relative_map(up[idx])
+        ax.imshow(img_np, alpha=0.36)
+        ax.imshow(layer_map, cmap="turbo", alpha=0.72, vmin=0, vmax=1)
+        mean_w = vis_w[:, idx].mean().item()
+        ax.set_title(f"{names[idx]}\nmean={mean_w:.2f}", weight="bold", fontsize=10)
+        ax.axis("off")
+
+    fig.suptitle(title, y=1.02, fontsize=11, weight="bold")
+    fig.text(0.5, 0.01, "Heatmaps show relative spatial routing intensity within each selected layer.",
+             ha="center", fontsize=8, color="#444444")
+    plt.tight_layout(rect=(0, 0.05, 1, 1))
+    _save_fig_dual(fig, save_path)
+    print(f"Compact DTR focus → {save_path} (+ .png)")
+    plt.close(fig)
+
+
+def plot_rebuttal_summary(
+    records: List[Dict],
+    save_path: str,
+    focus_layers: Optional[List[int]] = None,
+    max_rows: int = 3,
+):
+    """Multi-sample compact DTR figure intended for the rebuttal page."""
+    records = records[:max_rows]
+    if not records:
+        return
+
+    # Use the first record to decide the displayed layer ids, so columns are
+    # consistent across all rows.
+    first = records[0]
+    first_img = np.array(first["image"])
+    first_vis_w, _ = _routing_layer_maps(first["routing_weights"], first["n_query"], first_img.shape[:2])
+    selected = _select_focus_indices(first_vis_w, first.get("layer_indices"), focus_layers, max_layers=2)
+    names = _format_layer_names(first_vis_w.shape[1], first.get("layer_indices"))
+
+    ncols = 1 + len(selected)
+    nrows = len(records)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(2.05 * ncols, 1.95 * nrows))
+    if nrows == 1:
+        axes = np.array([axes])
+    if ncols == 1:
+        axes = axes.reshape(nrows, 1)
+
+    headers = ["Generated"] + [names[i] for i in selected]
+    for ax, header in zip(axes[0], headers):
+        ax.set_title(header, fontsize=9.5, weight="bold", pad=4)
+
+    for row, rec in enumerate(records):
+        image = rec["image"]
+        img_np = np.array(image)
+        H, W = img_np.shape[:2]
+        vis_w, up = _routing_layer_maps(rec["routing_weights"], rec["n_query"], (H, W))
+        sample_label = rec.get("id", str(row + 1))
+        short_prompt = textwrap.shorten(rec.get("prompt", ""), width=24, placeholder="...")
+
+        ax = axes[row, 0]
+        ax.imshow(img_np)
+        ax.set_ylabel(f"{sample_label}\n{short_prompt}", rotation=0, ha="right", va="center", fontsize=8)
+        ax.axis("off")
+
+        for col, idx in enumerate(selected, start=1):
+            ax = axes[row, col]
+            layer_map = _relative_map(up[idx])
+            ax.imshow(img_np, alpha=0.36)
+            ax.imshow(layer_map, cmap="turbo", alpha=0.72, vmin=0, vmax=1)
+            ax.text(
+                0.02, 0.96, f"mean {vis_w[:, idx].mean().item():.2f}",
+                transform=ax.transAxes, ha="left", va="top", fontsize=7,
+                bbox=dict(facecolor="white", alpha=0.68, edgecolor="none", pad=1.5),
+            )
+            ax.axis("off")
+
+    fig.text(0.5, 0.01, "True router outputs. Heatmaps show relative spatial routing intensity; text-object proxy masks are omitted.",
+             ha="center", fontsize=8, color="#444444")
+    plt.tight_layout(rect=(0, 0.035, 1, 1))
+    _save_fig_dual(fig, save_path)
+    print(f"Rebuttal summary DTR figure → {save_path} (+ .png)")
     plt.close(fig)
 
 
@@ -570,6 +738,8 @@ def process_one_prompt(
     output_dir: str,
     guidance_scale: float = 3.1,
     seed: int = 42,
+    focus_layers: Optional[List[int]] = None,
+    skip_object_regions: bool = False,
 ):
     """Generate one image, capture DTR data, and produce all visualisations.
 
@@ -595,21 +765,34 @@ def process_one_prompt(
             layer_indices=layer_indices,
             save_path=os.path.join(output_dir, "dtr_heatmaps.pdf"),
         )
+        plot_dtr_focus(
+            image, ctx.routing_weights, n_query,
+            layer_indices=layer_indices,
+            focus_layers=focus_layers,
+            save_path=os.path.join(output_dir, "dtr_focus.pdf"),
+        )
 
     hs = ctx.hidden_for_similarity
-    if keywords and hs is not None:
+    if keywords and hs is not None and not skip_object_regions:
         plot_object_regions(
             image, hs, tokenizer, prompts[0], keywords, n_query,
             save_path=os.path.join(output_dir, "object_regions.pdf"),
         )
 
-    if ctx.routing_weights is not None or (keywords and hs is not None):
+    if not skip_object_regions and (ctx.routing_weights is not None or (keywords and hs is not None)):
         plot_combined(
             image, ctx.routing_weights, hs,
             tokenizer, prompts[0], keywords, n_query,
             layer_indices=layer_indices,
             save_path=os.path.join(output_dir, "combined.pdf"),
         )
+
+    return {
+        "image": image,
+        "routing_weights": ctx.routing_weights,
+        "n_query": n_query,
+        "layer_indices": layer_indices,
+    }
 
 
 # ────────────────────────────────────────────────────────────
@@ -638,10 +821,30 @@ def main():
     parser.add_argument("--guidance_scale", type=float, default=3.1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_dir", default="results/vis_dtr")
+    parser.add_argument(
+        "--max_prompts", type=int, default=None,
+        help="Optional cap for quick rebuttal-figure generation.",
+    )
+    parser.add_argument(
+        "--focus_layers", default="",
+        help="Comma-separated routing layer ids to show in compact figures, e.g. '16,20'. "
+             "If omitted, layers with the largest spatial variation are selected.",
+    )
+    parser.add_argument(
+        "--skip_object_regions", action="store_true",
+        help="Skip noisy text-hidden similarity region maps and the old wide combined figure.",
+    )
+    parser.add_argument(
+        "--rebuttal_ids", default="",
+        help="Comma-separated prompt ids to include in output_dir/dtr_rebuttal.{pdf,png}.",
+    )
     args = parser.parse_args()
 
     if args.prompt is None and args.prompt_json is None:
         parser.error("Provide either --prompt (single mode) or --prompt_json (batch mode)")
+
+    focus_layers = [int(x.strip()) for x in args.focus_layers.split(",") if x.strip()]
+    rebuttal_ids = [x.strip() for x in args.rebuttal_ids.split(",") if x.strip()]
 
     # ── Load model (once) ───────────────────────────────
     disable_torch_init()
@@ -668,6 +871,8 @@ def main():
             kws = [k.strip() for k in item.get("keywords", "").split(",") if k.strip()]
             item_seed = item.get("seed", args.seed)
             jobs.append((pid, ptxt, kws, item_seed))
+            if args.max_prompts is not None and len(jobs) >= args.max_prompts:
+                break
         print(f"Loaded {len(jobs)} prompts from {args.prompt_json}")
     else:
         kws = [k.strip() for k in args.keywords.split(",") if k.strip()]
@@ -675,6 +880,7 @@ def main():
 
     # ── Process ─────────────────────────────────────────
     base_dir = args.output_dir
+    summary_records: List[Dict] = []
     for pid, ptxt, kws, seed in tqdm(jobs, desc="Visualising"):
         out_dir = os.path.join(base_dir, pid) if len(jobs) > 1 else base_dir
         os.makedirs(out_dir, exist_ok=True)
@@ -684,13 +890,27 @@ def main():
             print(f"  keywords: {kws}")
         print(f"  output  : {out_dir}")
 
-        process_one_prompt(
+        rec = process_one_prompt(
             model, tokenizer, pipe,
             prompt_text=ptxt,
             keywords=kws,
             output_dir=out_dir,
             guidance_scale=args.guidance_scale,
             seed=seed,
+            focus_layers=focus_layers,
+            skip_object_regions=args.skip_object_regions,
+        )
+        if rec.get("routing_weights") is not None:
+            rec.update({"id": pid, "prompt": ptxt})
+            if not rebuttal_ids or pid in rebuttal_ids:
+                summary_records.append(rec)
+
+    if summary_records:
+        plot_rebuttal_summary(
+            summary_records,
+            save_path=os.path.join(base_dir, "dtr_rebuttal.pdf"),
+            focus_layers=focus_layers,
+            max_rows=len(summary_records),
         )
 
     print(f"\nAll done. Results in {base_dir}")
