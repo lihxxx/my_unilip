@@ -374,61 +374,113 @@ def _build_items(
 
 
 _STOPWORDS = {
+    # Function words.
     "the", "a", "an", "of", "in", "on", "with", "and", "or", "to", "for",
     "at", "by", "from", "as", "into", "onto", "over", "under", "this",
     "that", "these", "those", "it", "its", "be", "is", "are", "was", "were",
-    "have", "has", "had", "do", "does", "did", "please", "just", "very",
-    "more", "less", "all", "some", "any", "no", "not", "so", "such",
-    "image", "picture", "photo", "scene", "background", "foreground",
-    "left", "right", "top", "bottom", "middle", "center", "side",
-    "one", "two", "three", "four", "five",
+    "have", "has", "had", "do", "does", "did", "but", "if", "then", "than",
+    "so", "such", "no", "not", "all", "any", "some", "more", "less",
+    "please", "just", "very", "also", "only", "now", "still", "out", "up",
+    "down", "off", "back", "again", "though", "while", "when", "where",
+    # Prepositions / spatial relations.
+    "behind", "front", "above", "below", "near", "next", "between", "around",
+    "across", "along", "beside", "inside", "outside", "beneath", "underneath",
+    "toward", "towards", "against", "among", "amongst", "before", "after",
+    # Pronouns / determiners.
+    "i", "you", "he", "she", "we", "they", "me", "him", "her", "us", "them",
+    "my", "your", "his", "their", "our", "mine", "yours",
+    # Generic 'image' meta-words: useless as visual keywords.
+    "image", "picture", "photo", "scene", "version", "result",
+    # Position words: too generic to be a useful keyword.
+    "left", "right", "top", "bottom", "middle", "center", "centre", "side",
+    # Generic edit verbs (bare-form, no -ing/-ed suffix to catch).
+    # These dominate every prompt and are useless as visual keywords.
+    "add", "remove", "delete", "replace", "change", "swap", "edit", "modify",
+    "alter", "transform", "convert", "make", "let", "turn", "keep", "use",
+    "put", "place", "set", "give", "take", "show", "draw", "paint", "fix",
+    "move", "rotate", "shift", "scale", "resize", "crop", "fill", "erase",
+    "apply", "create", "generate", "render", "adjust", "tweak", "refine",
+    "swap", "include", "introduce", "drop",
+    # Common color/attribute words used as adjectives — usually too generic
+    # to be a salient noun keyword on their own. Comment out if you DO want
+    # color heatmaps. Leaving in to focus heat-maps on objects.
+    "small", "large", "big", "tiny", "huge",
 }
 
+# Lightweight verb suffix heuristics; cheap stand-in for a real POS tagger.
+_VERB_SUFFIXES = ("ing", "ed", "ize", "ise", "ify")
+# Likely-noun suffixes (after stopword filtering).
+_NOUN_SUFFIXES = ("tion", "sion", "ment", "ness", "ity", "er", "or", "ist",
+                  "ism", "ship", "hood", "ance", "ence")
 
-def _extract_tail_noun(prompt: str) -> str:
-    """Best-effort: pick a single noun-ish keyword from the END of the prompt.
 
-    Strategy:
-      1) try nltk POS tag, take the last NN/NNS/NNP/NNPS token,
-      2) regex tail-word fallback that skips a stopword list,
-      3) last resort: literally the last alphabetic word.
+def _word_count(prompt: str) -> int:
+    import re
+    return len(re.findall(r"[A-Za-z]+", prompt or ""))
 
-    Returns lowercase keyword, never empty (falls back to '' only on
-    truly empty/whitespace prompts).
+
+def _extract_keywords(
+    prompt: str, max_kw: int = 4,
+) -> List[str]:
+    """Pull a short ordered NOUN-only keyword list from an edit instruction.
+
+    Heuristic, no external NLP deps. Verbs are explicitly excluded.
+      * tokenize alphabetic words,
+      * drop stopwords / pronouns / generic 'image' words / pure positions,
+      * drop anything that LOOKS like a verb (``-ing/-ed/-ize/-ise/-ify``)
+        — even though English does form noun gerunds, for keyword-attention
+        visualization we prefer concrete object nouns,
+      * prefer words with noun-like suffixes / plural -s / capitalized,
+      * fall back to remaining content words (still verb-filtered) so we
+        almost always get something for short prompts,
+      * de-duplicate preserving first-seen order, cap to ``max_kw``.
+
+    Returns lowercase list. Empty only when the prompt has no usable noun.
     """
     import re
     s = (prompt or "").strip()
     if not s:
-        return ""
-
-    # 1) nltk POS-tag (optional dependency).
-    try:
-        import nltk  # type: ignore
-        try:
-            tags = nltk.pos_tag(nltk.word_tokenize(s))
-        except LookupError:
-            # Models not downloaded; fall through to regex path.
-            tags = []
-        for tok, tag in reversed(tags):
-            if tag in ("NN", "NNS", "NNP", "NNPS") and tok.isalpha():
-                w = tok.lower()
-                if w not in _STOPWORDS:
-                    return w
-    except Exception:
-        pass
-
-    # 2) Regex tail-word skip-stopword fallback.
+        return []
     words = re.findall(r"[A-Za-z]+", s)
-    for w in reversed(words):
-        wl = w.lower()
-        if wl in _STOPWORDS or len(wl) < 2:
-            continue
-        return wl
 
-    # 3) Last resort.
-    if words:
-        return words[-1].lower()
-    return ""
+    primary: List[str] = []
+    fallback: List[str] = []
+    for w in words:
+        wl = w.lower()
+        if len(wl) < 3:
+            continue
+        if wl in _STOPWORDS:
+            continue
+        # Verb-suffix filter: '-ed' / '-ing' are too aggressive on short
+        # words (e.g. 'red', 'bed', 'fed', 'sing' is rare; require min len).
+        is_verb_like = False
+        for suf in _VERB_SUFFIXES:
+            if wl.endswith(suf) and len(wl) >= len(suf) + 3:
+                is_verb_like = True
+                break
+        if is_verb_like:
+            continue
+        is_noun_like = (
+            wl.endswith(_NOUN_SUFFIXES)
+            or wl.endswith("s")          # plural
+            or w[0].isupper()            # proper noun
+        )
+        if is_noun_like:
+            primary.append(wl)
+        else:
+            fallback.append(wl)
+
+    seen: set = set()
+    ordered: List[str] = []
+    for src in (primary, fallback):
+        for w in src:
+            if w in seen:
+                continue
+            seen.add(w)
+            ordered.append(w)
+            if len(ordered) >= max_kw:
+                return ordered
+    return ordered
 
 
 def _build_items_sft(
@@ -436,6 +488,7 @@ def _build_items_sft(
     sample_n: int,
     sample_seed: int,
     only_keys: Optional[List[str]],
+    max_prompt_words: int = 0,
 ) -> List[dict]:
     """Sample N edit examples from the local SFT webdataset (.tar shards).
 
@@ -447,6 +500,13 @@ def _build_items_sft(
     ``only_keys`` is honored just like in the GEdit branch — when provided
     we IGNORE the random sampling and instead pull exactly those keys
     (assumed to be ``sft_<6-digit-index>``).
+
+    ``max_prompt_words`` (>0) filters samples whose instruction has more
+    than this many alphabetic words BEFORE entering the reservoir, so the
+    sampled distribution is uniform over short-prompt samples (not biased
+    by the long-prompt majority). The key index ``cur_idx`` is only
+    incremented for samples that pass the filter, keeping ``sft_XXXXXX``
+    keys deterministic w.r.t. (glob, max_prompt_words).
     """
     import glob
     import io
@@ -500,17 +560,27 @@ def _build_items_sft(
             need = ("input.jpg", "output.jpg", "txt")
             if not all(k in grp for k in need):
                 continue
+
+            # Pre-filter on prompt length: read txt FIRST (cheap), only
+            # count this sample toward cur_idx / sampling if it survives.
+            try:
+                txt_bytes = tf.extractfile(grp["txt"]).read()
+                instruction = txt_bytes.decode("utf-8", errors="replace").strip()
+            except Exception as e:
+                print(f"   WARN: bad txt in {tar_path}:{stem}: {e}")
+                continue
+            if max_prompt_words > 0 and _word_count(instruction) > max_prompt_words:
+                continue
+
             cur_idx = global_idx
             global_idx += 1
 
             # Decide whether to materialize this sample.
-            # Reservoir sampling (Algorithm R): we draw a single random j in
-            # [0, cur_idx]. If j < sample_n, this sample is kept (or fills
-            # an empty slot when reservoir not full).
+            # Reservoir sampling (Algorithm R) over the FILTERED stream.
             keep_slot: Optional[int] = None
             if wanted_idx is not None:
                 if cur_idx in wanted_idx:
-                    keep_slot = -1  # sentinel: targeted mode, slot meaningless
+                    keep_slot = -1  # sentinel: targeted mode
             else:
                 if len(reservoir) < sample_n:
                     keep_slot = len(reservoir)
@@ -523,12 +593,10 @@ def _build_items_sft(
                 continue
 
             try:
-                txt_bytes = tf.extractfile(grp["txt"]).read()
-                instruction = txt_bytes.decode("utf-8", errors="replace").strip()
                 in_bytes = tf.extractfile(grp["input.jpg"]).read()
                 in_pil = Image.open(io.BytesIO(in_bytes)).convert("RGB").copy()
             except Exception as e:
-                print(f"   WARN: bad sample in {tar_path}:{stem}: {e}")
+                print(f"   WARN: bad input.jpg in {tar_path}:{stem}: {e}")
                 continue
 
             item = {
@@ -596,6 +664,16 @@ def main() -> None:
     parser.add_argument(
         "--sft_sample_seed", type=int, default=0,
         help="Reservoir-sampling RNG seed (use the same to reproduce).",
+    )
+    parser.add_argument(
+        "--sft_max_prompt_words", type=int, default=10,
+        help="Skip SFT samples whose instruction has more than this many "
+             "alphabetic words BEFORE sampling. 0 = no limit.",
+    )
+    parser.add_argument(
+        "--sft_max_keywords", type=int, default=4,
+        help="When --capture_attn, max distinct keywords (nouns) to extract "
+             "per SFT prompt for heat-map visualization.",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--guidance_scale", type=float, default=4.5)
@@ -678,26 +756,32 @@ def main() -> None:
             sample_n=args.sft_sample_n,
             sample_seed=args.sft_sample_seed,
             only_keys=only_keys,
+            max_prompt_words=args.sft_max_prompt_words,
         )
         if args.max_cases > 0:
             items = items[: args.max_cases]
         print(f">>> {len(items)} SFT edit cases selected "
-              f"(seed={args.sft_sample_seed}, only_keys={'yes' if only_keys else 'no'}).")
-        # SFT mode: auto-build keywords (tail-noun heuristic) so capture works
+              f"(seed={args.sft_sample_seed}, "
+              f"max_prompt_words={args.sft_max_prompt_words}, "
+              f"only_keys={'yes' if only_keys else 'no'}).")
+        # SFT mode: auto-build NOUN keywords (heuristic) so capture works
         # without an external keywords_json. User-supplied --keywords_json
         # still wins (we only fill keys that aren't already present).
+        # Multiple keywords per case are joined with ',' so the existing
+        # keywords_by_key parsing in _run_pass picks them all up.
         if args.capture_attn:
             n_filled = 0
             for it in items:
                 k = it["key"]
                 if k in keywords_by_key and keywords_by_key[k].strip():
                     continue
-                kw = _extract_tail_noun(it["instruction"])
-                if kw:
-                    keywords_by_key[k] = kw
+                kws = _extract_keywords(it["instruction"],
+                                        max_kw=args.sft_max_keywords)
+                if kws:
+                    keywords_by_key[k] = ",".join(kws)
                     n_filled += 1
-            print(f">>> SFT: auto-filled tail-noun keyword for {n_filled} items "
-                  f"(now {len(keywords_by_key)} keys have a keyword).")
+            print(f">>> SFT: auto-filled NOUN keywords for {n_filled} items "
+                  f"(now {len(keywords_by_key)} keys have a keyword list).")
             # Persist the auto-keywords for reproducibility / re-use.
             os.makedirs(args.out_root, exist_ok=True)
             kw_dump = os.path.join(args.out_root, "keywords_auto.json")

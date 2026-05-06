@@ -126,6 +126,13 @@ class _ShardCache:
 # ────────────────────────────────────────────────────────────
 # Plotting
 # ────────────────────────────────────────────────────────────
+def _truncate_for_title(s: str, max_words: int = 12) -> str:
+    parts = (s or "").split()
+    if len(parts) <= max_words:
+        return s or ""
+    return " ".join(parts[:max_words]) + "…"
+
+
 def plot_one(
     row: Dict[str, Any],
     out_root: str,
@@ -136,13 +143,15 @@ def plot_one(
     overlay_alpha: float = 0.55,
     baseline_label: str = "Baseline",
     dtr_label: str = "DTR (Ours)",
+    title_max_words: int = 12,
 ) -> Optional[str]:
     key = row["key"]
-    keyword = (
-        row.get("keyword")
-        or keyword_map.get(key, "")
-        or "(none)"
-    ).strip() or "(none)"
+    # Multi-keyword support: comma-separated list. Falls back to single
+    # keyword from selected_keys.json or auto-keywords map.
+    raw_kw = (row.get("keyword") or keyword_map.get(key, "") or "").strip()
+    keywords = [k.strip() for k in raw_kw.split(",") if k.strip()]
+    if not keywords:
+        keywords = ["(none)"]
 
     # 1) Input image from SFT tar.
     shard = row.get("_sft_shard")
@@ -155,7 +164,7 @@ def plot_one(
         print(f"[{key}] skip: input image not loadable from {shard}:{stem}.")
         return None
 
-    # 2) Generated images (path mirrors visualize_edit_compare.py).
+    # 2) Generated images.
     task_type = row.get("task_type", "sft_edit")
     language = row.get("instruction_language", "en")
     base_path = os.path.join(out_root, "generated", "base", task_type, language,
@@ -172,30 +181,41 @@ def plot_one(
     dtr_arr = np.asarray(dtr_pil).astype(np.float32) / 255.0
     inp_arr = np.asarray(input_pil).astype(np.float32) / 255.0
 
-    # 3) Heat-maps via the shared resolver.
+    # 3) Resolve heat-maps for ALL keywords on both ckpts.
     base_npz = os.path.join(out_root, "attn_grids", key, "daam_grids_base.npz")
     dtr_npz = os.path.join(out_root, "attn_grids", key, "daam_grids_dtr.npz")
-    g_base, src_base = _resolve_grid_for_keyword(base_npz, keyword, tokenizer)
-    g_dtr, src_dtr = _resolve_grid_for_keyword(dtr_npz, keyword, tokenizer)
-    print(f"[{key}] keyword='{keyword}' base={src_base} dtr={src_dtr}")
-
     Hb, Wb = base_arr.shape[:2]
     Hd, Wd = dtr_arr.shape[:2]
-    heat_b = _upsample_overlay(g_base, (Hb, Wb)) if g_base is not None else None
-    heat_d = _upsample_overlay(g_dtr, (Hd, Wd)) if g_dtr is not None else None
+    heats_b: List[Optional[np.ndarray]] = []
+    heats_d: List[Optional[np.ndarray]] = []
+    for kw in keywords:
+        gb, sb = _resolve_grid_for_keyword(base_npz, kw, tokenizer)
+        gd, sd = _resolve_grid_for_keyword(dtr_npz, kw, tokenizer)
+        print(f"[{key}] kw='{kw}' base={sb} dtr={sd}")
+        hb = _upsample_overlay(gb, (Hb, Wb)) if gb is not None else None
+        hd = _upsample_overlay(gd, (Hd, Wd)) if gd is not None else None
+        heats_b.append(hb)
+        heats_d.append(hd)
 
-    if heat_b is not None and heat_d is not None and (
-            heat_b.sum() > 1e-12 or heat_d.sum() > 1e-12):
-        vmin = float(min(heat_b.min(), heat_d.min()))
-        vmax = float(max(heat_b.max(), heat_d.max()))
-    else:
-        vmin, vmax = 0.0, 1.0
+    # Per-keyword vmin/vmax computed across both ckpts so colors match.
+    vminmax: List[tuple] = []
+    for hb, hd in zip(heats_b, heats_d):
+        finite = [h for h in (hb, hd) if h is not None and h.sum() > 1e-12]
+        if finite:
+            vmin = float(min(h.min() for h in finite))
+            vmax = float(max(h.max() for h in finite))
+        else:
+            vmin, vmax = 0.0, 1.0
+        vminmax.append((vmin, vmax))
 
-    # 4) Figure.
+    # 4) Figure: 2 rows x (2 + N_kw) cols.
+    n_kw = len(keywords)
+    n_cols = 2 + n_kw
     fig, axes = plt.subplots(
-        2, 3,
-        figsize=(3.4 * 3, 3.6 * 2),
+        2, n_cols,
+        figsize=(3.4 * n_cols, 3.6 * 2),
         gridspec_kw={"wspace": 0.05, "hspace": 0.16},
+        squeeze=False,
     )
 
     # Col 0: input image (same on both rows).
@@ -212,15 +232,18 @@ def plot_one(
     axes[0, 1].set_title("Edit Result", fontsize=12)
     axes[1, 1].imshow(dtr_arr); axes[1, 1].set_xticks([]); axes[1, 1].set_yticks([])
 
-    # Col 2: heat-map overlay on the edited result.
-    _draw_overlay(axes[0, 2], base_arr,
-                  heat_b if (heat_b is not None and heat_b.sum() > 1e-12) else None,
-                  keyword, vmin, vmax, cmap, overlay_alpha)
-    _draw_overlay(axes[1, 2], dtr_arr,
-                  heat_d if (heat_d is not None and heat_d.sum() > 1e-12) else None,
-                  keyword, vmin, vmax, cmap, overlay_alpha)
+    # Cols 2..: per-keyword heat-map overlays.
+    for c, (kw, hb, hd, (vmin, vmax)) in enumerate(
+            zip(keywords, heats_b, heats_d, vminmax)):
+        col = 2 + c
+        _draw_overlay(axes[0, col], base_arr,
+                      hb if (hb is not None and hb.sum() > 1e-12) else None,
+                      kw, vmin, vmax, cmap, overlay_alpha)
+        _draw_overlay(axes[1, col], dtr_arr,
+                      hd if (hd is not None and hd.sum() > 1e-12) else None,
+                      kw, vmin, vmax, cmap, overlay_alpha)
 
-    title = f"[{key}]  {row.get('instruction','')}"
+    title = f"[{key}]  {_truncate_for_title(row.get('instruction', ''), title_max_words)}"
     fig.suptitle(title, fontsize=10, y=0.995)
 
     save_dir = os.path.join(out_root, "compare_figs", key)
