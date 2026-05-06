@@ -94,14 +94,32 @@ def _save_grids(
     n_steps: int,
     n_layers: int,
     save_path: str,
+    attn_qs: Optional[np.ndarray] = None,
+    pos_prompt: Optional[str] = None,
+    token_ids: Optional[List[int]] = None,
 ) -> None:
+    """Persist per-keyword grids AND (when available) the raw aggregated
+    cross-attention ``attn_qs`` of shape ``[Q, S]`` plus the prompt's token
+    ids. The latter two let downstream tools (e.g. plot_edit_compare.py)
+    re-derive arbitrary keyword grids without re-running the model.
+    """
     payload: Dict[str, np.ndarray] = {
         "_meta_n_steps": np.array([n_steps], dtype=np.int32),
         "_meta_n_layers": np.array([n_layers], dtype=np.int32),
     }
     for i, (kw, g) in enumerate(grids.items()):
         payload[f"kw_{i}_{kw}"] = g.astype(np.float32)
+    if attn_qs is not None:
+        payload["attn_qs"] = attn_qs.astype(np.float32)
+    if token_ids is not None:
+        payload["token_ids"] = np.asarray(token_ids, dtype=np.int64)
     np.savez(save_path, **payload)
+    if pos_prompt is not None:
+        # Save the prompt as a sibling .json so it's human-readable and never
+        # mangled by numpy's variable-length string handling.
+        with open(os.path.splitext(save_path)[0] + "_prompt.json",
+                  "w", encoding="utf-8") as f:
+            json.dump({"pos_prompt": pos_prompt}, f, ensure_ascii=False, indent=2)
 
 
 def _compute_keyword_grids(
@@ -111,13 +129,19 @@ def _compute_keyword_grids(
     keywords: List[str],
     step_window: Tuple[float, float],
     layer_indices: Optional[List[int]],
-) -> Tuple[Dict[str, np.ndarray], int, int]:
-    """Aggregate captured cross-attention into per-keyword grids."""
+) -> Tuple[Dict[str, np.ndarray], int, int, Optional[np.ndarray], Optional[List[int]]]:
+    """Aggregate captured cross-attention into per-keyword grids.
+
+    Returns ``(grids, n_steps, n_layers, attn_qs_np, token_ids)`` where
+    ``attn_qs_np`` is the [Q, S] aggregated attention as numpy float32 and
+    ``token_ids`` is the prompt's token id list (for downstream re-matching).
+    Both are ``None`` only when no attention was captured.
+    """
     n_steps = len(ctx.capture.attn)
     n_layers = len(ctx.capture.attn[0]) if n_steps else 0
     grids: Dict[str, np.ndarray] = {}
-    if n_steps == 0 or not keywords:
-        return grids, n_steps, n_layers
+    if n_steps == 0:
+        return grids, n_steps, n_layers, None, None
 
     s0 = max(0, int(round(step_window[0] * n_steps)))
     s1 = max(s0 + 1, int(round(step_window[1] * n_steps)))
@@ -129,6 +153,15 @@ def _compute_keyword_grids(
     if grid_side * grid_side != Q:
         attn_qs = attn_qs[: grid_side * grid_side]
         grid_side = int(round(math.sqrt(attn_qs.shape[0])))
+
+    attn_qs_np = attn_qs.detach().cpu().numpy() if hasattr(attn_qs, "detach") \
+        else np.asarray(attn_qs)
+    token_ids: Optional[List[int]] = None
+    try:
+        token_ids = tokenizer(pos_prompt, return_tensors="pt",
+                              padding=False).input_ids[0].tolist()
+    except Exception:
+        token_ids = None
 
     for kw in keywords:
         positions = find_keyword_token_positions(tokenizer, pos_prompt, kw)
@@ -142,7 +175,7 @@ def _compute_keyword_grids(
             f"      keyword '{kw}': positions={positions} "
             f"max={grids[kw].max():.4f} mean={grids[kw].mean():.4f}"
         )
-    return grids, n_steps, n_layers
+    return grids, n_steps, n_layers, attn_qs_np, token_ids
 
 
 def _generate_single(
@@ -157,8 +190,13 @@ def _generate_single(
     keywords: List[str],
     step_window: Tuple[float, float],
     layer_indices: Optional[List[int]],
-) -> Tuple[Image.Image, Optional[Dict[str, np.ndarray]], int, int]:
-    """Run the edit pipeline once, optionally capturing DAAM grids."""
+) -> Tuple[Image.Image, Optional[Dict[str, np.ndarray]], int, int,
+           Optional[np.ndarray], Optional[List[int]], Optional[str]]:
+    """Run the edit pipeline once, optionally capturing DAAM grids.
+
+    Returns ``(image, grids, n_steps, n_layers, attn_qs_np, token_ids, pos_prompt)``.
+    The trailing three are ``None`` when ``capture_attn`` is False.
+    """
     pos_prompt, neg_prompt = build_edit_prompts(instruction)
     set_global_seed(seed)
     gen = torch.Generator(device=model.device).manual_seed(seed)
@@ -170,7 +208,7 @@ def _generate_single(
                 guidance_scale=guidance_scale,
                 generator=gen,
             )
-        grids, n_steps, n_layers = _compute_keyword_grids(
+        grids, n_steps, n_layers, attn_qs_np, token_ids = _compute_keyword_grids(
             ctx=ctx,
             tokenizer=tokenizer,
             pos_prompt=pos_prompt,
@@ -178,14 +216,14 @@ def _generate_single(
             step_window=step_window,
             layer_indices=layer_indices,
         )
-        return edited, grids, n_steps, n_layers
+        return edited, grids, n_steps, n_layers, attn_qs_np, token_ids, pos_prompt
     else:
         edited = pipe(
             [pos_prompt, neg_prompt, input_image.convert("RGB")],
             guidance_scale=guidance_scale,
             generator=gen,
         )
-        return edited, None, 0, 0
+        return edited, None, 0, 0, None, None, None
 
 
 # ────────────────────────────────────────────────────────────
@@ -262,7 +300,8 @@ def _run_pass(
                   f"available — capturing anyway with empty keyword list.")
 
         try:
-            edited, grids, n_steps, n_layers = _generate_single(
+            (edited, grids, n_steps, n_layers,
+             attn_qs_np, token_ids, pos_prompt) = _generate_single(
                 model=multi_model,
                 tokenizer=tokenizer,
                 pipe=pipe,
@@ -285,7 +324,13 @@ def _run_pass(
 
         if capture_attn and grids is not None:
             os.makedirs(attn_dir, exist_ok=True)
-            _save_grids(grids, n_steps, n_layers, attn_path)
+            _save_grids(
+                grids=grids, n_steps=n_steps, n_layers=n_layers,
+                save_path=attn_path,
+                attn_qs=attn_qs_np,
+                pos_prompt=pos_prompt,
+                token_ids=token_ids,
+            )
 
         if (idx + 1) % 25 == 0:
             print(f"   [{tag}] {idx + 1}/{len(items)} done.")

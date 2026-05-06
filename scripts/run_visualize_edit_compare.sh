@@ -141,6 +141,7 @@ run_plot() {
   fi
   python -u scripts/plot_edit_compare.py \
     --out_root "${OUT_ROOT}" \
+    --tokenizer_path "${BASE_CKPT}" \
     "${EXTRA[@]}"
 }
 

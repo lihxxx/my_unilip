@@ -224,18 +224,23 @@ class DiTCrossAttnContext:
 # ────────────────────────────────────────────────────────────
 # Keyword token-position lookup
 # ────────────────────────────────────────────────────────────
-def find_keyword_token_positions(tokenizer, full_prompt: str, keyword: str) -> List[int]:
-    """Return token positions of *keyword* inside ``tokenizer(full_prompt)``.
+def _dedup_keep_order(xs: List[int]) -> List[int]:
+    seen = set()
+    out: List[int] = []
+    for x in xs:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
 
-    We tokenize the full prompt once (matching what ``generate_image`` does),
-    then sliding-window match the keyword token-ids.
 
-    Both with-leading-space and without-leading-space variants are tried so we
-    catch keywords that appear mid-sentence ("a fluffy orange cat" → ' cat').
+def _exact_token_match(tokenizer, full_ids: List[int], keyword: str) -> List[int]:
+    """Strict sliding-window match of tokenize(keyword)'s id sequence.
+
+    Tries 4 variants (with/without leading space, original/lowercased) so we
+    catch the BPE-merge change that happens mid-sentence vs at the start of
+    a string.
     """
-    enc = tokenizer(full_prompt, return_tensors="pt", padding=False)
-    full_ids: List[int] = enc.input_ids[0].tolist()
-
     candidates: List[List[int]] = []
     for variant in (" " + keyword, keyword, keyword.lower(), " " + keyword.lower()):
         ids = tokenizer(variant, add_special_tokens=False).input_ids
@@ -252,15 +257,76 @@ def find_keyword_token_positions(tokenizer, full_prompt: str, keyword: str) -> L
                 positions.extend(range(i, i + L))
         if positions:
             break
+    return positions
 
-    # Dedup, preserve order.
-    seen = set()
-    out = []
-    for p in positions:
-        if p not in seen:
-            seen.add(p)
-            out.append(p)
-    return out
+
+def _decoded_substring_match(tokenizer, full_ids: List[int], keyword: str) -> List[int]:
+    """Fallback: decode each individual token, then look for keyword as a
+    case-insensitive substring of the per-token text. Catches BPE pieces that
+    don't line up under exact id-sequence matching.
+    """
+    if not keyword.strip():
+        return []
+    kw_low = keyword.strip().lower()
+    # Also try each whitespace-split word, so 'mirror reflection' matches a
+    # token whose decoded text contains either 'mirror' or 'reflection'.
+    word_set = {kw_low} | {w for w in kw_low.split() if w}
+
+    positions: List[int] = []
+    # Decode each token individually with the same tokenizer to keep BPE
+    # boundaries (skip_special_tokens=False so we don't drop position indices).
+    for i, tid in enumerate(full_ids):
+        try:
+            piece = tokenizer.decode([tid], skip_special_tokens=True,
+                                     clean_up_tokenization_spaces=False)
+        except Exception:
+            continue
+        piece_low = piece.lower().strip()
+        if not piece_low:
+            continue
+        for w in word_set:
+            if w in piece_low or piece_low in w:
+                positions.append(i)
+                break
+    return positions
+
+
+def find_keyword_token_positions(tokenizer, full_prompt: str, keyword: str) -> List[int]:
+    """Return token positions of *keyword* inside ``tokenizer(full_prompt)``.
+
+    Three-stage matching, in order of preference:
+
+      1. **Exact id-sequence match** of ``tokenize(keyword)`` against the
+         full prompt id sequence (4 case/leading-space variants).
+      2. **Per-word union**: split ``keyword`` on whitespace and run stage-1
+         on each word independently, returning the union of positions.
+         Salvages compound nouns like ``"mirror reflection"`` whose joint
+         BPE form differs from the in-context one.
+      3. **Decoded substring**: decode every token in the prompt one-by-one
+         and keep positions whose decoded text contains (or is contained in)
+         any keyword word. Last-resort, but never returns garbage because
+         the per-token decode is deterministic.
+    """
+    enc = tokenizer(full_prompt, return_tensors="pt", padding=False)
+    full_ids: List[int] = enc.input_ids[0].tolist()
+
+    # Stage 1: exact match on the whole keyword.
+    pos = _exact_token_match(tokenizer, full_ids, keyword)
+    if pos:
+        return _dedup_keep_order(pos)
+
+    # Stage 2: per-word union (only meaningful for multi-word keywords).
+    words = [w for w in keyword.split() if w]
+    if len(words) > 1:
+        union: List[int] = []
+        for w in words:
+            union.extend(_exact_token_match(tokenizer, full_ids, w))
+        if union:
+            return _dedup_keep_order(union)
+
+    # Stage 3: decoded substring fallback.
+    pos = _decoded_substring_match(tokenizer, full_ids, keyword)
+    return _dedup_keep_order(pos)
 
 
 # ────────────────────────────────────────────────────────────

@@ -37,7 +37,10 @@ import matplotlib.pyplot as plt
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
-from visualize_daam import _normalize, _save_fig_dual, _upsample_overlay  # noqa: E402
+from visualize_daam import (  # noqa: E402
+    _normalize, _save_fig_dual, _upsample_overlay,
+    find_keyword_token_positions, keyword_grid,
+)
 
 
 # ────────────────────────────────────────────────────────────
@@ -58,19 +61,24 @@ def _load_csv(csv_path: str) -> List[Dict[str, Any]]:
     return rows
 
 
-def _load_grid_npz(path: str) -> Dict[str, np.ndarray]:
-    """Return {keyword_str: grid}. The file stores ``kw_{i}_{name}`` keys
-    plus _meta_* arrays which we ignore."""
+def _load_npz(path: str) -> Optional[Dict[str, np.ndarray]]:
+    """Return the raw contents of one capture npz, or None when missing."""
     if not os.path.exists(path):
-        return {}
+        return None
     npz = np.load(path)
+    return {k: np.asarray(npz[k]) for k in npz.files}
+
+
+def _legacy_grid_dict(npz: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+    """Extract ``{keyword: grid}`` from the legacy ``kw_{i}_{name}`` keys.
+
+    Only used as a fallback for npz files written before we started saving
+    the raw [Q, S] aggregated attention.
+    """
     out: Dict[str, np.ndarray] = {}
-    for k in npz.files:
-        if k.startswith("_meta"):
-            continue
+    for k in npz.keys():
         if not k.startswith("kw_"):
             continue
-        # 'kw_{i}_{name}' -> name (name itself may contain underscores).
         rest = k[len("kw_"):]
         if "_" in rest:
             _, name = rest.split("_", 1)
@@ -80,11 +88,11 @@ def _load_grid_npz(path: str) -> Dict[str, np.ndarray]:
     return out
 
 
-def _pick_grid_for_keyword(
+def _pick_legacy_grid(
     grids: Dict[str, np.ndarray],
     keyword: str,
 ) -> Optional[np.ndarray]:
-    """Best-effort lookup: exact match first, then case-insensitive, then any."""
+    """Best-effort lookup against the legacy per-keyword dict."""
     if not grids:
         return None
     if keyword in grids:
@@ -92,11 +100,98 @@ def _pick_grid_for_keyword(
     low = {k.lower(): v for k, v in grids.items()}
     if keyword.lower() in low:
         return low[keyword.lower()]
-    # Fallback: take the first non-zero grid (often there's only one).
+    # Per-word fallback: union grids whose keyword shares a word with target.
+    target_words = {w.lower() for w in keyword.split() if w}
+    if target_words:
+        unions: List[np.ndarray] = []
+        for k, v in grids.items():
+            kw_words = {w.lower() for w in k.split() if w}
+            if kw_words & target_words and v.sum() > 1e-12:
+                unions.append(v)
+        if unions:
+            return np.maximum.reduce(unions)
+    # Last resort: first non-zero grid.
     for v in grids.values():
         if v.sum() > 1e-12:
             return v
     return next(iter(grids.values()))
+
+
+def _recompute_grid_from_attn(
+    npz: Dict[str, np.ndarray],
+    prompt_path: str,
+    keyword: str,
+    tokenizer,
+) -> Tuple[Optional[np.ndarray], List[int]]:
+    """Recompute a per-keyword grid from the raw aggregated attention stored
+    in ``npz['attn_qs']`` plus ``token_ids`` / sibling prompt JSON.
+
+    Returns ``(grid_or_None, matched_positions)``.
+    """
+    if "attn_qs" not in npz:
+        return None, []
+    if tokenizer is None:
+        return None, []
+
+    attn_qs = np.asarray(npz["attn_qs"])  # [Q, S]
+    Q, S = attn_qs.shape
+    grid_side = int(round(np.sqrt(Q)))
+    if grid_side * grid_side != Q:
+        attn_qs = attn_qs[: grid_side * grid_side]
+        grid_side = int(round(np.sqrt(attn_qs.shape[0])))
+
+    # Load prompt text from sibling JSON (preferred), else reconstruct from
+    # token_ids by decode.
+    pos_prompt = ""
+    if os.path.exists(prompt_path):
+        try:
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                pos_prompt = json.load(f).get("pos_prompt", "")
+        except Exception:
+            pos_prompt = ""
+    if not pos_prompt and "token_ids" in npz:
+        try:
+            pos_prompt = tokenizer.decode(
+                npz["token_ids"].tolist(),
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )
+        except Exception:
+            pos_prompt = ""
+    if not pos_prompt:
+        return None, []
+
+    positions = find_keyword_token_positions(tokenizer, pos_prompt, keyword)
+    positions = [p for p in positions if 0 <= p < S]
+    if not positions:
+        return None, []
+
+    import torch as _torch
+    grid = keyword_grid(_torch.from_numpy(attn_qs), positions, grid_size=grid_side)
+    return np.asarray(grid, dtype=np.float32), positions
+
+
+def _resolve_grid_for_keyword(
+    npz_path: str,
+    keyword: str,
+    tokenizer,
+) -> Tuple[Optional[np.ndarray], str]:
+    """Top-level resolver. Tries (1) recompute-from-attn, (2) legacy
+    ``kw_*`` dict, in that order. Returns ``(grid, source_tag)`` where
+    ``source_tag`` is 'recompute', 'legacy' or 'missing'.
+    """
+    npz = _load_npz(npz_path)
+    if npz is None:
+        return None, "missing"
+    prompt_path = os.path.splitext(npz_path)[0] + "_prompt.json"
+    grid, _ = _recompute_grid_from_attn(npz, prompt_path, keyword, tokenizer)
+    if grid is not None and grid.sum() > 1e-12:
+        return grid, "recompute"
+    legacy = _legacy_grid_dict(npz)
+    grid = _pick_legacy_grid(legacy, keyword)
+    if grid is not None and grid.sum() > 1e-12:
+        return grid, "legacy"
+    return None, "missing"
 
 
 def _load_input_image(out_root: str, key: str, dataset_name: str,
@@ -155,6 +250,7 @@ def plot_one(
     ds_cache: Dict[str, Any],
     dataset_name: str,
     dataset_split: str,
+    tokenizer=None,
     cmap: str = "jet",
     overlay_alpha: float = 0.55,
     baseline_label: str = "Baseline",
@@ -184,13 +280,13 @@ def plot_one(
     dtr_arr = np.asarray(dtr_pil).astype(np.float32) / 255.0
     inp_arr = np.asarray(input_pil).astype(np.float32) / 255.0
 
-    # 2) Heat-maps (may be missing).
-    base_grids = _load_grid_npz(
-        os.path.join(out_root, "attn_grids", key, "daam_grids_base.npz"))
-    dtr_grids = _load_grid_npz(
-        os.path.join(out_root, "attn_grids", key, "daam_grids_dtr.npz"))
-    g_base = _pick_grid_for_keyword(base_grids, keyword)
-    g_dtr = _pick_grid_for_keyword(dtr_grids, keyword)
+    # 2) Heat-maps (may be missing). Use resolver: recompute-from-attn first,
+    # fall back to legacy ``kw_*`` dict, then placeholder.
+    base_npz_path = os.path.join(out_root, "attn_grids", key, "daam_grids_base.npz")
+    dtr_npz_path = os.path.join(out_root, "attn_grids", key, "daam_grids_dtr.npz")
+    g_base, src_base = _resolve_grid_for_keyword(base_npz_path, keyword, tokenizer)
+    g_dtr, src_dtr = _resolve_grid_for_keyword(dtr_npz_path, keyword, tokenizer)
+    print(f"[{key}] keyword='{keyword}' base={src_base} dtr={src_dtr}")
 
     Hb, Wb = base_arr.shape[:2]
     Hd, Wd = dtr_arr.shape[:2]
@@ -279,6 +375,10 @@ def main() -> None:
     parser.add_argument("--dataset_split", default="train")
     parser.add_argument("--baseline_label", default="Baseline")
     parser.add_argument("--dtr_label", default="DTR (Ours)")
+    parser.add_argument("--tokenizer_path", default="",
+                        help="HF model path for AutoTokenizer.from_pretrained "
+                             "(used to recompute keyword grids from raw attn). "
+                             "Default: $BASE_CKPT or skip recompute.")
     args = parser.parse_args()
 
     out_root = os.path.abspath(args.out_root)
@@ -301,6 +401,23 @@ def main() -> None:
         wanted = [r["key"] for r in rows[: args.top_k]]
     print(f">>> Will plot {len(wanted)} keys.")
 
+    # Optional tokenizer for recomputing keyword grids from raw attn.
+    tokenizer = None
+    tok_path = args.tokenizer_path or os.environ.get("BASE_CKPT", "")
+    if tok_path:
+        try:
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(
+                tok_path, trust_remote_code=True,
+            )
+            print(f">>> Loaded tokenizer from {tok_path}")
+        except Exception as e:
+            print(f">>> WARN: failed to load tokenizer from {tok_path}: {e}")
+            tokenizer = None
+    else:
+        print(">>> No --tokenizer_path / $BASE_CKPT; recompute-from-attn disabled, "
+              "falling back to legacy kw_* grids only.")
+
     ds_cache: Dict[str, Any] = {}
     out_fig_root = os.path.join(out_root, "compare_figs")
     written: List[str] = []
@@ -315,6 +432,7 @@ def main() -> None:
             ds_cache=ds_cache,
             dataset_name=args.dataset_name,
             dataset_split=args.dataset_split,
+            tokenizer=tokenizer,
             baseline_label=args.baseline_label,
             dtr_label=args.dtr_label,
         )
