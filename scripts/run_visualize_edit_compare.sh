@@ -26,8 +26,8 @@ STAGE="${1:-all}"
 
 # ─────────────────── Paths ───────────────────
 BASE_CKPT="${BASE_CKPT:-/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/UniLIP-1B}"
-DTR_CKPT="${DTR_CKPT:-/mnt/tidal-alsh01/dataset/zeus/lihongxiang/unified_model/my_unilip/results/unilip_intern_vl_1b_sft_alignment_distill05_D6_dynamic6/checkpoint-2385}"
-OUT_ROOT="${OUT_ROOT:-results/vis_edit_compare}"
+DTR_CKPT="${DTR_CKPT:-/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/UniLIP-3B}"
+OUT_ROOT="${OUT_ROOT:-results/vis_edit_compare_3b}"
 
 # ─────────────────── Knobs ───────────────────
 # NOTE: do NOT use the bare name LANGUAGE — it collides with the POSIX locale
@@ -37,7 +37,7 @@ GEDIT_LANGUAGE="${GEDIT_LANGUAGE:-en}"
 SEED="${SEED:-42}"
 GUIDANCE_SCALE="${GUIDANCE_SCALE:-4.5}"
 MAX_CASES="${MAX_CASES:-0}"          # 0 = full set
-TOP_K="${TOP_K:-8}"                  # for selected_topk.json + plot defaults
+TOP_K="${TOP_K:-50}"                 # for selected_topk.json + plot defaults
 STEP_WINDOW="${STEP_WINDOW:-0.4,0.6}"
 LAYERS="${LAYERS:-}"                 # empty = all DiT layers
 
