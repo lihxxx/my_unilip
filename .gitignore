@@ -26,3 +26,7 @@ results
 *.png
 *.jpg
 *.jpeg
+
+# Secrets
+secret.env
+*.env

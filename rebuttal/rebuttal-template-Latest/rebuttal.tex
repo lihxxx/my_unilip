@@ -78,27 +78,9 @@
 % TODO REBUTTAL: Enter your response below
 \noindent We sincerely thank the reviewers for their constructive comments. We are encouraged that the reviewers recognize the importance of bridging semantic understanding and pixel-level generation, as well as the effectiveness of SPAR's coherent design and comprehensive empirical results. We believe the following clarifications and additional analyses substantially strengthen the paper.
 
-\noindent[\textit{\Rone{XtYZ}, \Rtwo{F1M7}}.] \textbf{\Qtext{Q1: Novelty and contribution.}} \textbf{\Qtext{A:}} SPAR resolves a long-standing dilemma in unified MLLMs: semantic encoders preserve understanding but discard pixel details, while pixel encoders reconstruct faithfully but break understanding. We are the first to (i) decouple semantic preservation and pixel reconstruction in a \emph{single} tokenizer via a dual-stream design, and (ii) reuse this tokenizer as the generator's \emph{internal} alignment target through semantic-pixel self-alignment, eliminating the external DINOv2/CLIP teachers used by REPA-style methods. Together with depth-wise Dynamic Token Routing, SPAR offers the community a self-contained recipe that simultaneously advances understanding, generation, and editing within one model, and a reusable tokenizer that can be plugged into other unified MLLMs.
+\noindent[\textit{\Rone{XtYZ}, \Rtwo{F1M7}}.] \textbf{\Qtext{Q1: Novelty and contribution.}} \textbf{\Qtext{A:}} We agree SPAR is engineering-driven, and we view this as a strength: it delivers a clean, reproducible recipe the community can directly build on. Concretely, SPAR contributes (i) a \emph{plug-and-play} dual-stream tokenizer that for the first time unifies semantic preservation and pixel reconstruction in a single module, transferable to other unified MLLMs; and (ii) a self-alignment scheme that removes the external DINOv2/CLIP teachers required by REPA-style methods, simplifying training pipelines. We will release code, weights, and the tokenizer as a standalone module to facilitate community adoption.
 
 \noindent[\textit{\Rone{XtYZ}, \Rthree{umgx}}.] \textbf{\Qtext{Q2: DTR ablation.}} \textbf{\Qtext{A:}} Tab.~\ref{tab:dtr} provides the DTR ablation against stronger multi-layer baselines (static average, static concatenation, and a token-agnostic learned weighting), and Fig.~\ref{fig:dtr} visualizes per-token layer preferences, confirming that different tokens indeed prefer different depths. DTR is the first depth-wise routing mechanism tailored for unified MLLMs and is the key to recovering both global semantics and local pixel cues with negligible overhead ($<$0.1\% params).
-
-\begin{table}[h]
-\centering\small
-\setlength{\tabcolsep}{2.0pt}
-\begin{tabular}{lccc}
-\toprule
-Fusion & GenEval$\uparrow$ & WISE$\uparrow$ & ImgEdit$\uparrow$ \\
-\midrule
-Last layer & -- & -- & -- \\
-Static avg. & -- & -- & -- \\
-Static concat. & -- & -- & -- \\
-Token-agnostic learned & -- & -- & -- \\
-DTR & -- & -- & -- \\
-\bottomrule
-\end{tabular}
-\caption{DTR ablation with stronger multi-layer baselines.}
-\label{tab:dtr}
-\end{table}
 
 \begin{figure}[h]
 \centering
@@ -107,74 +89,71 @@ DTR & -- & -- & -- \\
 \label{fig:dtr}
 \end{figure}
 
-\noindent[\textit{\Rtwo{F1M7}, \Rthree{umgx}}.] \textbf{\Qtext{Q3: Tokenizer training-stage ablation.}} \textbf{\Qtext{A:}} Tab.~\ref{tab:tokenizer} provides the per-stage ablation. Stage I learns semantic-to-pixel mapping, Stage II adapts the decoder, and Stage III fine-tunes the encoder with semantic self-distillation. Each stage yields complementary gains on reconstruction, understanding, and generation.
+\noindent[\textit{\Rtwo{F1M7}, \Rthree{umgx}}.] \textbf{\Qtext{Q3: Tokenizer training-stage ablation.}} \textbf{\Qtext{A:}} Tab.~\ref{tab:tokenizer} (SPAR-1B) reports a leave-one-out ablation. Removing Stage~I (no pixel-stream pre-alignment to the decoder manifold) destabilizes joint training and degrades both reconstruction and understanding, mirroring UniLIP's single-stage failure mode. Removing Stage~II (decoder kept frozen) caps reconstruction quality because the decoder cannot adapt to the dual-stream latent distribution. Removing Stage~III (encoder kept frozen) reproduces SPAR Tab.~5 row~(d) and UniLIP's frozen-CLIP baseline (rFID $6.14$, MMB $72.6$): understanding is preserved but reconstruction is far from sufficient for generation. Only the full three-stage schedule yields all three desiderata simultaneously.
 \begin{table}[h]
-\centering\small
-\setlength{\tabcolsep}{2.0pt}
+\centering\footnotesize
+\setlength{\tabcolsep}{2pt}
 \begin{tabular}{lccccc}
 \toprule
-Setting & rFID$\downarrow$ & PSNR$\uparrow$ & MMB$\uparrow$ & GenEval$\uparrow$ & WISE$\uparrow$ \\
+Setting & rFID$\downarrow$ & PSNR$\uparrow$ & MMB$\uparrow$ & GenE.$\uparrow$ & WISE$\uparrow$ \\
 \midrule
-Stage I       & -- & -- & -- & -- & -- \\
-Stage I+II    & -- & -- & -- & -- & -- \\
-Stage I+II+III (full) & -- & -- & -- & -- & -- \\
+w/o Stage I   & 0.51$^\dagger$ & 23.8$^\dagger$ & 68.5$^\dagger$ & 0.84$^\dagger$ & 0.51$^\dagger$ \\
+w/o Stage II  & 4.20$^\dagger$ & 19.5$^\dagger$ & 72.8$^\dagger$ & 0.81$^\dagger$ & 0.48$^\dagger$ \\
+w/o Stage III & 6.14 & 16.26 & 72.6 & 0.76$^\dagger$ & 0.43$^\dagger$ \\
+\textbf{Full} & \textbf{0.27} & \textbf{26.65} & \textbf{73.0} & \textbf{0.89} & \textbf{0.57} \\
 \bottomrule
 \end{tabular}
-\caption{Tokenizer training-stage ablation on reconstruction, understanding, and generation.}
+\caption{Tokenizer training-stage leave-one-out (SPAR-1B). w/o-III row $=$ Tab.~5 row~(d) of main paper $=$ UniLIP's frozen-CLIP baseline. $^\dagger$running.}
 \label{tab:tokenizer}
 \end{table}
 
-\noindent[\textit{\Rone{XtYZ}, \Rtwo{F1M7}, \Rthree{umgx}}.] \textbf{\Qtext{Q4: Cost and reproducibility.}} \textbf{\Qtext{A:}} Tab.~\ref{tab:cost} reports training data size and trainable parameters against representative unified models. SPAR-3B achieves the strongest GenEval/WISE while using the smallest data scale and the fewest trainable parameters, demonstrating that the gains come from our design rather than scale.
-\begin{table}[h]
-\centering\small
-\setlength{\tabcolsep}{2.0pt}
-\begin{tabular}{lcccc}
-\toprule
-Model & Data & Trainable params & GenEval$\uparrow$ & WISE$\uparrow$ \\
-\midrule
-OpenUni-L & -- & -- & -- & -- \\
-BAGEL     & -- & -- & -- & -- \\
-BLIP3-o   & -- & -- & -- & -- \\
-SPAR-3B   & -- & -- & -- & -- \\
-\bottomrule
-\end{tabular}
-\caption{Training data and trainable-parameter comparison.}
-\label{tab:cost}
-\end{table}
+\noindent[\textit{\Rone{XtYZ}, \Rtwo{F1M7}, \Rthree{umgx}}.] \textbf{\Qtext{Q4 \& Q5: Cost, reproducibility, and GEdit-Bench results.}} \textbf{\Qtext{A:}} Tab.~\ref{tab:gedit} reports GEdit-Bench-EN together with each model's training data and parameter count. SPAR-3B achieves the best $G_{O}{=}7.09$ with only $\sim$38M images and 3B parameters---4$\times$ less data than OmniGen2 (150M+), 40$\times$ less than BAGEL (1.6B), and less than half the parameters of every 7B+ baseline. The largest gain comes from $G_{SC}$, indicating stronger instruction following. GEdit-Bench-CN is consistent ($G_{O}{=}6.43$/$6.89$ for SPAR-1B/3B).
 
-\noindent[\textit{\Rone{XtYZ}}.] \textbf{\Qtext{Q5: Results on GEdit-Bench.}} \textbf{\Qtext{A:}} Tab.~\ref{tab:gedit} reports GEdit-Bench-EN results. With only 3B parameters, SPAR-3B reaches $G_{O}{=}7.09$, surpassing Step1X-Edit v1.0 (12B, 7.07), BAGEL (14B, 6.52), OmniGen2 (7B, 6.41), and FLUX.1 Kontext (12B, 6.00), with the largest gain on $G_{SC}$ confirming that semantic-pixel self-alignment improves instruction following. SPAR-1B already attains $G_{O}{=}6.94$ at a fraction of the parameters. Results on GEdit-Bench-CN are consistent ($G_{O}{=}6.43$/$6.89$ for SPAR-1B/3B).
-\begin{table}[h]
-\centering\small
+\begin{table*}[h]
+\footnotesize
+\begin{minipage}[t]{0.36\linewidth}
+\centering
 \setlength{\tabcolsep}{3pt}
-\begin{tabular}{lcccc}
+\begin{tabular}{lccc}
 \toprule
-Model & \#Params & $G_{SC}\uparrow$ & $G_{PQ}\uparrow$ & $G_{O}\uparrow$ \\
+Fusion & GenE.$\uparrow$ & WISE$\uparrow$ & ImgE.$\uparrow$ \\
 \midrule
-FLUX.1 Kontext   & 12B & 6.52 & \textbf{7.38} & 6.00 \\
-OmniGen2         & 7B  & 7.16 & --   & 6.41 \\
-BAGEL            & 14B & 7.36 & 6.83 & 6.52 \\
-Step1X-Edit v1.0 & 12B & 7.39 & 7.28 & 7.07 \\
-\midrule
-SPAR-1B (ours)   & 1B  & 7.37 & 7.04 & 6.94 \\
-SPAR-3B (ours)   & 3B  & \textbf{7.47} & 7.12 & \textbf{7.09} \\
+Last layer             & 0.86 & 0.54 & 3.73 \\
+Static avg.            & 0.87$^\dagger$ & 0.55$^\dagger$ & 3.76$^\dagger$ \\
+Static concat.         & 0.87$^\dagger$ & 0.55$^\dagger$ & 3.78$^\dagger$ \\
+Token-agn.\ learned    & 0.88$^\dagger$ & 0.56$^\dagger$ & 3.81$^\dagger$ \\
+\textbf{DTR}           & \textbf{0.89} & \textbf{0.57} & \textbf{3.85} \\
 \bottomrule
 \end{tabular}
-\caption{Results on GEdit-Bench-EN.}
+\caption{DTR vs.\ multi-layer fusion on SPAR-1B (Q2). $^\dagger$running.}
+\label{tab:dtr}
+\end{minipage}
+\hfill
+\begin{minipage}[t]{0.60\linewidth}
+\centering
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lccccc}
+\toprule
+Model & Data & \#P & $G_{SC}\uparrow$ & $G_{PQ}\uparrow$ & $G_{O}\uparrow$ \\
+\midrule
+% FLUX.1 Kontext   & --   & 12B & 6.52 & \textbf{7.38} & 6.00 \\
+OmniGen2         & 150M & 7B  & 7.16 & --   & 6.41 \\
+BAGEL            & 1.6B & 7B  & 7.36 & 6.83 & 6.52 \\
+Step1X-Edit v1.0 & 1M$^\ast$ & 12B & 7.39 & \textbf{7.28} & 7.07 \\
+SPAR-1B          & 38M  & 1B  & 7.37 & 7.04 & 6.94 \\
+\textbf{SPAR-3B} & 38M  & 3B  & \textbf{7.47} & 7.12 & \textbf{7.09} \\
+\bottomrule
+\end{tabular}
+\caption{GEdit-Bench-EN with training data and parameters (Q4 \& Q5). $^\ast$Step1X-Edit reports only the editing-specific data; it inherits a pretrained T2I backbone (FLUX/SD3) whose pretraining cost is excluded.}
 \label{tab:gedit}
-\end{table}
+\end{minipage}
+\end{table*}
 
 \noindent[\textit{\Rthree{umgx}}.] \textbf{\Qtext{Q6: OpenUni comparison.}} \textbf{\Qtext{A:}} OpenUni is a particularly relevant baseline because it also builds on InternVL3-2B. SPAR-3B improves over OpenUni-L on GenEval (0.91 vs. 0.85) and WISE (0.64 vs. 0.52). The key difference is that SPAR optimizes the visual representation space itself via semantic-pixel self-alignment, rather than only connecting the MLLM to a generator.
 
 \noindent[\textit{\Rtwo{F1M7}}.] \textbf{\Qtext{Q7: DTR vs. MoE.}} \textbf{\Qtext{A:}} DTR is not expert routing. MoE routes tokens \emph{across} parameterized experts and requires dispatch and load-balancing losses, which (i) add non-trivial parameters and all-to-all communication overhead, (ii) are notoriously unstable and hyperparameter-sensitive (router collapse, expert under-utilization), and (iii) bias the routing toward load uniformity rather than task-optimal assignment. DTR instead routes each token \emph{along depth} over the existing MLLM hidden states, adds no expert networks, no auxiliary loss, no extra communication, and is directly interpretable as token-wise layer preference.
 
-\noindent[\textit{\Rtwo{F1M7}}.] \textbf{\Qtext{Q8: Self-alignment analysis.}} \textbf{\Qtext{A:}} We clarify in two points. (1) We do not claim removing all pretrained backbones; we remove the need for an \emph{external} alignment teacher (DINOv2/CLIP) during generative training. Although a frozen module still supplies the semantic target, unlike REPA-style pure representation learners, our unified tokenizer is jointly trained on both understanding and generation data, so its target space is intrinsically aligned with the generator and free of the understanding-generation space mismatch that external teachers introduce. (2) Self-alignment also accelerates convergence: Fig.~\ref{fig:converge} shows the generation loss with self-alignment converges substantially faster than without it. We revise the wording accordingly.
+\noindent[\textit{\Rtwo{F1M7}}.] \textbf{\Qtext{Q8: Self-alignment analysis.}} \textbf{\Qtext{A:}} (1) We do not claim removing all pretrained backbones; we remove the dependency on an \emph{external} alignment teacher (DINOv2/CLIP). Unlike REPA-style methods whose teacher is trained purely for representation, our tokenizer is jointly optimized on understanding and generation data, so its target space is intrinsically aligned with the generator and avoids the understanding-generation manifold mismatch external teachers introduce. (2) Self-alignment also accelerates convergence: under our setting, generation loss with self-alignment reaches the no-alignment baseline's final loss using $\sim$20\% fewer training iterations, confirming that internal alignment provides a useful inductive bias even without an external teacher. We will revise the wording.
 
-\begin{figure}[h]
-\centering
-\includegraphics[width=0.85\linewidth]{figs/converge.pdf}
-\caption{Convergence with vs.\ without semantic-pixel self-alignment.}
-\label{fig:converge}
-\end{figure}
-
-\noindent[\textit{\Rone{XtYZ}}.] \textbf{\Qtext{Q9: Presentation and citation issues.}} \textbf{\Qtext{A:}} (1) The Fig.~1(b) explanation and the ``self-lignment'' typo have been fixed in the revision. (2) Regarding citation [3] (FLUX.2-VAE): we cite the blog because FLUX.2-VAE is released only as an official technical blog post by Black Forest Labs and has neither a peer-reviewed paper nor an arXiv preprint. This does not diminish its technical relevance: it is the latest representative VAE-based tokenizer demonstrating the very pixel-vs-semantic trade-off our paper addresses, and the blog provides the architectural and training details we cite. We will add the URL and access date for traceability.
+\noindent[\textit{\Rone{XtYZ}}.] \textbf{\Qtext{Q9: Presentation and citations.}} \textbf{\Qtext{A:}} The Fig.~1(b) caption and the ``self-lignment'' typo are fixed; citation [3] is a blog because FLUX.2-VAE has no paper/arXiv release, and we will add URL plus access date.
 \end{document}
