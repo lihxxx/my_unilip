@@ -140,81 +140,98 @@ def plot_compare_rows(
     cmap: str = "jet",
     overlay_alpha: float = 0.55,
     title: Optional[str] = None,
-    row_labels: Tuple[str, str] = ("Baseline", "DTR"),
+    row_labels: Tuple[str, ...] = ("Baseline", "DTR"),
     shared_norm_per_keyword: bool = True,
+    dtr2: Optional[PassResult] = None,
 ) -> None:
-    """Save 2-row x (1+K)-col DAAM comparison figure as ``save_path.{pdf,png}``.
+    """Save N-row x (1+K)-col DAAM comparison figure (N=2 or 3) as
+    ``save_path.{pdf,png}``.
+
+    Rows are: Baseline, DTR; if ``dtr2`` is supplied a third row is appended.
+    ``row_labels`` must have length matching the number of rows.
 
     When ``shared_norm_per_keyword`` is True (default) the same vmin/vmax is
-    used for both rows of a given keyword, so the visual intensity is directly
-    comparable between Baseline and DTR.
+    used across all rows of a given keyword, so the visual intensity is
+    directly comparable between models.
     """
-    n_panels = 1 + len(keywords)
+    # Pack rows so the rest of the function is row-count agnostic.
+    rows: List[PassResult] = [baseline, dtr]
+    if dtr2 is not None:
+        rows.append(dtr2)
+    n_rows = len(rows)
+    assert len(row_labels) == n_rows, (
+        f"row_labels ({len(row_labels)}) must match number of rows ({n_rows})"
+    )
 
-    base_img = np.asarray(baseline.image.convert("RGB")).astype(np.float32) / 255.0
-    dtr_img = np.asarray(dtr.image.convert("RGB")).astype(np.float32) / 255.0
-    H_b, W_b = base_img.shape[:2]
-    H_d, W_d = dtr_img.shape[:2]
+    n_panels = 1 + len(keywords)
+    imgs = [np.asarray(r.image.convert("RGB")).astype(np.float32) / 255.0 for r in rows]
+    HWs = [im.shape[:2] for im in imgs]
 
     fig, axes = plt.subplots(
-        2, n_panels,
-        figsize=(3.2 * n_panels, 3.4 * 2),
+        n_rows, n_panels,
+        figsize=(3.2 * n_panels, 3.4 * n_rows),
         gridspec_kw={"wspace": 0.05, "hspace": 0.12},
     )
+    # matplotlib collapses dims when 1; force 2-D.
     if n_panels == 1:
-        axes = np.array(axes).reshape(2, 1)
+        axes = np.asarray(axes).reshape(n_rows, 1)
+    elif n_rows == 1:
+        axes = np.asarray(axes).reshape(1, n_panels)
 
-    # Column 0: generated images.
-    axes[0, 0].imshow(base_img)
-    axes[0, 0].set_title("Generated", fontsize=12)
-    axes[0, 0].set_ylabel(row_labels[0], fontsize=13, fontweight="bold")
-    axes[0, 0].set_xticks([])
-    axes[0, 0].set_yticks([])
-
-    axes[1, 0].imshow(dtr_img)
-    axes[1, 0].set_ylabel(row_labels[1], fontsize=13, fontweight="bold")
-    axes[1, 0].set_xticks([])
-    axes[1, 0].set_yticks([])
+    # Column 0: generated images, one per row.
+    for r in range(n_rows):
+        axes[r, 0].imshow(imgs[r])
+        if r == 0:
+            axes[r, 0].set_title("Generated", fontsize=12)
+        axes[r, 0].set_ylabel(row_labels[r], fontsize=13, fontweight="bold")
+        axes[r, 0].set_xticks([])
+        axes[r, 0].set_yticks([])
 
     # Columns 1..K: keyword overlays.
     for col, kw in enumerate(keywords, start=1):
-        g_base = baseline.keyword_grids.get(kw)
-        g_dtr = dtr.keyword_grids.get(kw)
+        per_row_grids = [r.keyword_grids.get(kw) for r in rows]
 
-        # Per-keyword shared normalisation across the two rows.
-        if shared_norm_per_keyword and g_base is not None and g_dtr is not None \
-                and (g_base.sum() > 1e-12 or g_dtr.sum() > 1e-12):
-            heat_b = _upsample_overlay(g_base, (H_b, W_b))
-            heat_d = _upsample_overlay(g_dtr, (H_d, W_d))
-            vmin = min(heat_b.min(), heat_d.min())
-            vmax = max(heat_b.max(), heat_d.max())
-            denom = max(vmax - vmin, 1e-8)
-            heat_b = (heat_b - vmin) / denom
-            heat_d = (heat_d - vmin) / denom
+        # Per-keyword shared normalisation across all rows.
+        if shared_norm_per_keyword and any(
+            g is not None and g.sum() > 1e-12 for g in per_row_grids
+        ):
+            heats: List[Optional[np.ndarray]] = []
+            for g, hw in zip(per_row_grids, HWs):
+                heats.append(
+                    _upsample_overlay(g, hw)
+                    if g is not None and g.sum() > 1e-12 else None
+                )
+            valid = [h for h in heats if h is not None]
+            if valid:
+                vmin = min(h.min() for h in valid)
+                vmax = max(h.max() for h in valid)
+                denom = max(vmax - vmin, 1e-8)
+                heats = [
+                    None if h is None else (h - vmin) / denom for h in heats
+                ]
+            else:
+                heats = [None] * n_rows
         else:
-            heat_b = _normalize(_upsample_overlay(g_base, (H_b, W_b))) \
-                if g_base is not None and g_base.sum() > 1e-12 else None
-            heat_d = _normalize(_upsample_overlay(g_dtr, (H_d, W_d))) \
-                if g_dtr is not None and g_dtr.sum() > 1e-12 else None
+            heats = [
+                _normalize(_upsample_overlay(g, hw))
+                if g is not None and g.sum() > 1e-12 else None
+                for g, hw in zip(per_row_grids, HWs)
+            ]
 
-        # Row 0 (baseline)
-        ax_b = axes[0, col]
-        ax_b.imshow(base_img)
-        if heat_b is None:
-            ax_b.set_title(f"\"{kw}\"\n(no token match)", fontsize=11, color="red")
-        else:
-            ax_b.imshow(heat_b, cmap=cmap, alpha=overlay_alpha, vmin=0.0, vmax=1.0)
-            ax_b.set_title(f"\"{kw}\"", fontsize=12)
-        ax_b.set_xticks([]); ax_b.set_yticks([])
-
-        # Row 1 (DTR)
-        ax_d = axes[1, col]
-        ax_d.imshow(dtr_img)
-        if heat_d is None:
-            ax_d.set_title("(no token match)", fontsize=10, color="red")
-        else:
-            ax_d.imshow(heat_d, cmap=cmap, alpha=overlay_alpha, vmin=0.0, vmax=1.0)
-        ax_d.set_xticks([]); ax_d.set_yticks([])
+        for r in range(n_rows):
+            ax = axes[r, col]
+            ax.imshow(imgs[r])
+            if heats[r] is None:
+                ax.set_title(
+                    f"\"{kw}\"\n(no token match)" if r == 0 else "(no token match)",
+                    fontsize=11 if r == 0 else 10,
+                    color="red",
+                )
+            else:
+                ax.imshow(heats[r], cmap=cmap, alpha=overlay_alpha, vmin=0.0, vmax=1.0)
+                if r == 0:
+                    ax.set_title(f"\"{kw}\"", fontsize=12)
+            ax.set_xticks([]); ax.set_yticks([])
 
     if title:
         fig.suptitle(title, fontsize=11, y=0.995)
@@ -300,6 +317,11 @@ def main():
     )
     parser.add_argument("--baseline_model_path", required=True)
     parser.add_argument("--dtr_model_path", required=True)
+    parser.add_argument(
+        "--dtr2_model_path", default="",
+        help="Optional 3rd ckpt (e.g. larger DTR variant). When set, the comparison "
+             "figure has 3 rows (Baseline / DTR / DTR-2) and a 3rd pass is run.",
+    )
     parser.add_argument("--prompt_json", required=True)
     parser.add_argument("--output_dir", default="results/vis_daam_compare")
     parser.add_argument("--guidance_scale", type=float, default=4.5)
@@ -320,6 +342,10 @@ def main():
     parser.add_argument(
         "--dtr_label", default="DTR (Ours)",
         help="Row label for the DTR pass.",
+    )
+    parser.add_argument(
+        "--dtr2_label", default="DTR-3B (Ours)",
+        help="Row label for the optional 3rd pass.",
     )
     args = parser.parse_args()
 
@@ -368,21 +394,48 @@ def main():
         output_dir=args.output_dir,
     )
 
+    # Optional Pass 3: DTR-2 (e.g. larger variant)
+    dtr2_results: Optional[Dict[str, PassResult]] = None
+    if args.dtr2_model_path.strip():
+        dtr2_results = _run_pass_for_all_prompts(
+            model_path=args.dtr2_model_path,
+            tag="dtr2",
+            jobs=jobs,
+            guidance_scale=args.guidance_scale,
+            step_window=step_window,
+            layer_indices=layer_indices,
+            output_dir=args.output_dir,
+        )
+
     # Plot comparison figures
     print("\n>>> Plotting side-by-side comparison figures …")
     for pid, ptxt, kws, _ in jobs:
         if pid not in base_results or pid not in dtr_results:
             print(f"[{pid}] missing one of the passes, skip.")
             continue
+        if dtr2_results is not None and pid not in dtr2_results:
+            print(f"[{pid}] dtr2 pass missing, skip.")
+            continue
         out_dir = os.path.join(args.output_dir, pid)
-        plot_compare_rows(
-            baseline=base_results[pid],
-            dtr=dtr_results[pid],
-            keywords=kws,
-            save_path=os.path.join(out_dir, "daam_compare.pdf"),
-            title=f"[{pid}] {ptxt}",
-            row_labels=(args.baseline_label, args.dtr_label),
-        )
+        if dtr2_results is None:
+            plot_compare_rows(
+                baseline=base_results[pid],
+                dtr=dtr_results[pid],
+                keywords=kws,
+                save_path=os.path.join(out_dir, "daam_compare.pdf"),
+                title=f"[{pid}] {ptxt}",
+                row_labels=(args.baseline_label, args.dtr_label),
+            )
+        else:
+            plot_compare_rows(
+                baseline=base_results[pid],
+                dtr=dtr_results[pid],
+                dtr2=dtr2_results[pid],
+                keywords=kws,
+                save_path=os.path.join(out_dir, "daam_compare.pdf"),
+                title=f"[{pid}] {ptxt}",
+                row_labels=(args.baseline_label, args.dtr_label, args.dtr2_label),
+            )
         print(f"[{pid}] -> {os.path.join(out_dir, 'daam_compare.pdf')}")
 
     print("\nAll done.")
