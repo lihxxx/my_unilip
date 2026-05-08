@@ -45,6 +45,9 @@ def main() -> None:
                    help="Only keep rows whose edited_object is non-empty (default in --no_filter mode).")
     p.add_argument("--min_delta_o", type=float, default=None,
                    help="Override the default delta_O > 0 floor with this threshold.")
+    p.add_argument("--task_types", default="",
+                   help="Comma-separated GEdit task_type whitelist, e.g. "
+                        "'subject-add,subject-remove,subject-replace'. Empty = no filter.")
     args = p.parse_args()
 
     csv_path = args.csv or os.path.join(args.out_root, "scores", "score_diff.csv")
@@ -54,6 +57,12 @@ def main() -> None:
 
     rows = _load_csv(csv_path)
     rows.sort(key=lambda r: r.get("delta_O", float("-inf")), reverse=True)
+
+    # Task-type whitelist (applied before any other filter so the totals are
+    # reported relative to the whitelisted subset).
+    if args.task_types:
+        wanted = {t.strip() for t in args.task_types.split(",") if t.strip()}
+        rows = [r for r in rows if r.get("task_type") in wanted]
 
     if args.no_filter:
         kept = rows
@@ -74,6 +83,7 @@ def main() -> None:
         "rows": topk,
         "k": args.top_k,
         "criterion": criterion,
+        "task_types": args.task_types or "ALL",
         "n_total": len(rows),
         "n_after_filter": len(kept),
     }
