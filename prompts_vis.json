@@ -2,101 +2,201 @@
   {
     "id": "001",
     "prompt": "A black cat sitting on a red book next to a yellow lamp",
-    "keywords": "cat,book,lamp"
+    "keywords": "cat,sitting,book,lamp"
   },
   {
     "id": "002",
     "prompt": "A small white dog holding a tennis ball in its mouth on green grass",
-    "keywords": "dog,ball,grass"
+    "keywords": "dog,holding,ball,grass"
   },
   {
     "id": "003",
     "prompt": "A woman wearing a blue dress holding a bouquet of pink roses",
-    "keywords": "woman,dress,roses"
+    "keywords": "woman,wearing,holding,roses"
   },
   {
     "id": "004",
     "prompt": "A wooden table with a steaming cup of coffee, an open book, and a pair of glasses",
-    "keywords": "coffee,book,glasses"
+    "keywords": "steaming,coffee,book,glasses"
   },
   {
     "id": "005",
     "prompt": "A red bicycle leaning against a brick wall beside a green plant in a pot",
-    "keywords": "bicycle,wall,plant"
+    "keywords": "bicycle,leaning,wall,plant"
   },
   {
     "id": "006",
     "prompt": "A young boy riding a brown horse across an open grassy field",
-    "keywords": "boy,horse,field"
+    "keywords": "boy,riding,horse,field"
   },
   {
     "id": "007",
     "prompt": "A glass vase containing three sunflowers placed on a wooden windowsill",
-    "keywords": "vase,sunflowers,windowsill"
+    "keywords": "vase,containing,sunflowers,windowsill"
   },
   {
     "id": "008",
     "prompt": "An astronaut floating in space holding a small green plant in a clear pot",
-    "keywords": "astronaut,plant,pot"
+    "keywords": "astronaut,floating,holding,plant"
   },
   {
     "id": "009",
     "prompt": "A chef in a white apron slicing a fresh tomato on a wooden cutting board",
-    "keywords": "chef,tomato,board"
+    "keywords": "chef,slicing,tomato,board"
   },
   {
     "id": "010",
     "prompt": "A panda bear sitting on a tree branch eating a stalk of bamboo",
-    "keywords": "panda,branch,bamboo"
+    "keywords": "panda,sitting,eating,bamboo"
   },
   {
     "id": "011",
     "prompt": "Three red apples arranged in a row on a wooden table, with a green pear sitting to the left of them",
-    "keywords": "apples,pear,table"
+    "keywords": "apples,arranged,pear,table"
   },
   {
     "id": "012",
     "prompt": "Two small dogs sitting side by side on a brown couch, with a striped pillow placed between them",
-    "keywords": "dogs,pillow,couch"
+    "keywords": "dogs,sitting,pillow,couch"
   },
   {
     "id": "013",
     "prompt": "A row of three glass bottles standing on a white shelf, each containing a different colored liquid",
-    "keywords": "bottles,shelf,liquid"
+    "keywords": "bottles,standing,shelf,liquid"
   },
   {
     "id": "014",
     "prompt": "Two birds perched on a tree branch, one above the other, with red berries hanging beside them",
-    "keywords": "birds,branch,berries"
+    "keywords": "birds,perched,branch,berries"
   },
   {
     "id": "015",
     "prompt": "Three burning candles of different heights arranged on a round wooden tray, surrounded by scattered rose petals",
-    "keywords": "candles,tray,petals"
+    "keywords": "candles,burning,tray,petals"
   },
   {
     "id": "016",
     "prompt": "Two coffee cups placed in front of a laptop on a marble desk, with a stack of three books to the right",
-    "keywords": "cups,laptop,books"
+    "keywords": "cups,placed,laptop,books"
   },
   {
     "id": "017",
     "prompt": "A pair of brown leather shoes neatly placed beside a striped umbrella leaning against a yellow wall",
-    "keywords": "shoes,umbrella,wall"
+    "keywords": "shoes,placed,umbrella,leaning"
   },
   {
     "id": "018",
     "prompt": "Three colorful balloons floating above a birthday cake, with two wrapped gift boxes stacked on its left side",
-    "keywords": "balloons,cake,boxes"
+    "keywords": "balloons,floating,cake,boxes"
   },
   {
     "id": "019",
     "prompt": "Two cats lying back to back on a windowsill, with three potted succulents lined up behind them",
-    "keywords": "cats,windowsill,succulents"
+    "keywords": "cats,lying,windowsill,succulents"
   },
   {
     "id": "020",
     "prompt": "A pizza cut into eight slices on a round plate, with two glass cups of orange juice placed on either side",
-    "keywords": "pizza,plate,cups"
+    "keywords": "pizza,plate,cups,placed"
+  },
+  {
+    "id": "021",
+    "prompt": "A child throwing a frisbee while a brown dog jumps to catch it in mid-air on a sunny lawn",
+    "keywords": "child,throwing,dog,jumps"
+  },
+  {
+    "id": "022",
+    "prompt": "An old man reading a newspaper while drinking from a steaming mug at a cafe table",
+    "keywords": "man,reading,drinking,mug"
+  },
+  {
+    "id": "023",
+    "prompt": "A girl pouring milk from a glass jug into a small white cup on a kitchen counter",
+    "keywords": "girl,pouring,jug,cup"
+  },
+  {
+    "id": "024",
+    "prompt": "A musician playing an acoustic guitar while sitting on a wooden stool under a spotlight",
+    "keywords": "musician,playing,guitar,stool"
+  },
+  {
+    "id": "025",
+    "prompt": "A barista pouring espresso into a paper cup while another cup waits on the counter beside a pastry",
+    "keywords": "barista,pouring,cup,pastry"
+  },
+  {
+    "id": "026",
+    "prompt": "A monkey climbing a thick rope while another monkey is hanging upside down from a tree branch nearby",
+    "keywords": "monkey,climbing,hanging,branch"
+  },
+  {
+    "id": "027",
+    "prompt": "A gardener watering a row of red tulips with a green hose while a yellow butterfly flies above them",
+    "keywords": "gardener,watering,tulips,butterfly"
+  },
+  {
+    "id": "028",
+    "prompt": "A boy kicking a soccer ball toward a wooden goal while another boy is running behind him",
+    "keywords": "boy,kicking,ball,running"
+  },
+  {
+    "id": "029",
+    "prompt": "A baker kneading dough on a flour-dusted table, with a tray of three bread loaves cooling beside him",
+    "keywords": "baker,kneading,dough,loaves"
+  },
+  {
+    "id": "030",
+    "prompt": "Two children blowing bubbles in a park, with a small white dog chasing the floating bubbles",
+    "keywords": "children,blowing,dog,chasing"
+  },
+  {
+    "id": "031",
+    "prompt": "A woman painting a landscape on a canvas easel while holding a wooden palette in her left hand",
+    "keywords": "woman,painting,canvas,palette"
+  },
+  {
+    "id": "032",
+    "prompt": "A fisherman casting a line into a calm lake while a wooden boat floats nearby with two oars resting inside",
+    "keywords": "fisherman,casting,boat,oars"
+  },
+  {
+    "id": "033",
+    "prompt": "A cat chasing a red laser dot across a wooden floor, with a green plant sitting in a corner",
+    "keywords": "cat,chasing,dot,plant"
+  },
+  {
+    "id": "034",
+    "prompt": "A waiter carrying a silver tray with three wine glasses while walking through a candlelit dining room",
+    "keywords": "waiter,carrying,tray,glasses"
+  },
+  {
+    "id": "035",
+    "prompt": "A boy stacking three colorful blocks on a carpet while a teddy bear watches from the side",
+    "keywords": "boy,stacking,blocks,bear"
+  },
+  {
+    "id": "036",
+    "prompt": "A woman tying her hair into a ponytail in front of a round mirror, with two combs placed on a vanity",
+    "keywords": "woman,tying,mirror,combs"
+  },
+  {
+    "id": "037",
+    "prompt": "A squirrel cracking a nut on a tree stump while two more nuts lie scattered around it",
+    "keywords": "squirrel,cracking,nut,stump"
+  },
+  {
+    "id": "038",
+    "prompt": "A boy flying a red kite in a windy field while a girl beside him chases a runaway hat",
+    "keywords": "boy,flying,kite,chases"
+  },
+  {
+    "id": "039",
+    "prompt": "A robot arm assembling a small wooden chair on a workshop bench, with three screws lined up beside it",
+    "keywords": "robot,assembling,chair,screws"
+  },
+  {
+    "id": "040",
+    "prompt": "An elderly woman knitting a scarf with red yarn, with two balls of blue yarn resting in a wicker basket",
+    "keywords": "woman,knitting,scarf,basket"
   }
 ]
