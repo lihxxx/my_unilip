@@ -48,5 +48,55 @@
     "id": "010",
     "prompt": "A panda bear sitting on a tree branch eating a stalk of bamboo",
     "keywords": "panda,branch,bamboo"
+  },
+  {
+    "id": "011",
+    "prompt": "Three red apples arranged in a row on a wooden table, with a green pear sitting to the left of them",
+    "keywords": "apples,pear,table"
+  },
+  {
+    "id": "012",
+    "prompt": "Two small dogs sitting side by side on a brown couch, with a striped pillow placed between them",
+    "keywords": "dogs,pillow,couch"
+  },
+  {
+    "id": "013",
+    "prompt": "A row of three glass bottles standing on a white shelf, each containing a different colored liquid",
+    "keywords": "bottles,shelf,liquid"
+  },
+  {
+    "id": "014",
+    "prompt": "Two birds perched on a tree branch, one above the other, with red berries hanging beside them",
+    "keywords": "birds,branch,berries"
+  },
+  {
+    "id": "015",
+    "prompt": "Three burning candles of different heights arranged on a round wooden tray, surrounded by scattered rose petals",
+    "keywords": "candles,tray,petals"
+  },
+  {
+    "id": "016",
+    "prompt": "Two coffee cups placed in front of a laptop on a marble desk, with a stack of three books to the right",
+    "keywords": "cups,laptop,books"
+  },
+  {
+    "id": "017",
+    "prompt": "A pair of brown leather shoes neatly placed beside a striped umbrella leaning against a yellow wall",
+    "keywords": "shoes,umbrella,wall"
+  },
+  {
+    "id": "018",
+    "prompt": "Three colorful balloons floating above a birthday cake, with two wrapped gift boxes stacked on its left side",
+    "keywords": "balloons,cake,boxes"
+  },
+  {
+    "id": "019",
+    "prompt": "Two cats lying back to back on a windowsill, with three potted succulents lined up behind them",
+    "keywords": "cats,windowsill,succulents"
+  },
+  {
+    "id": "020",
+    "prompt": "A pizza cut into eight slices on a round plate, with two glass cups of orange juice placed on either side",
+    "keywords": "pizza,plate,cups"
   }
 ]
