@@ -324,7 +324,7 @@ def main():
     )
     parser.add_argument("--prompt_json", required=True)
     parser.add_argument("--output_dir", default="results/vis_daam_compare")
-    parser.add_argument("--guidance_scale", type=float, default=4.5)
+    parser.add_argument("--guidance_scale", type=float, default=3.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max_prompts", type=int, default=None)
     parser.add_argument(

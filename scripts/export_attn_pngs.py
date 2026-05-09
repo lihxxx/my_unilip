@@ -161,19 +161,33 @@ def _row_lookup(out_root: str, key: str) -> Dict:
 # ────────────────────────────────────────────────────────────
 def _read_dtr2_assets(
     out_root_dtr2: str,
+    out_root: str,
     key: str,
     task_type: str,
     language: str,
 ) -> Tuple[Optional[Image.Image], Optional[str]]:
-    """Locate dtr2 (e.g. 3B) edited PNG and attn npz under a sibling out_root.
+    """Locate dtr2 (e.g. 3B) edited PNG and attn npz.
 
-    The dtr2 pipeline is expected to have been launched with ``base=dtr=3B``,
-    so we always read the ``dtr/`` branch (it equals what the 3B model produced).
+    Two layouts supported:
+
+    * **Same-root** (recommended, used by the 3-way driver): dtr2 lives next
+      to base/dtr inside the SAME out_root, under ``generated/dtr2/`` and
+      ``attn_grids/{key}/daam_grids_dtr2.npz``. Auto-detected when
+      ``out_root_dtr2`` is empty.
+    * **Sibling-root** (legacy): ``out_root_dtr2`` is a separate pipeline dir
+      that was launched with ``base=dtr=3B``, so we read ``generated/dtr/``
+      and ``daam_grids_dtr.npz`` from it.
     """
-    edit_path = os.path.join(out_root_dtr2, "generated", "dtr",
-                             task_type, language, f"{key}.png")
-    npz_path = os.path.join(out_root_dtr2, "attn_grids", key,
-                            "daam_grids_dtr.npz")
+    if out_root_dtr2:
+        edit_path = os.path.join(out_root_dtr2, "generated", "dtr",
+                                 task_type, language, f"{key}.png")
+        npz_path = os.path.join(out_root_dtr2, "attn_grids", key,
+                                "daam_grids_dtr.npz")
+    else:
+        edit_path = os.path.join(out_root, "generated", "dtr2",
+                                 task_type, language, f"{key}.png")
+        npz_path = os.path.join(out_root, "attn_grids", key,
+                                "daam_grids_dtr2.npz")
     pil = Image.open(edit_path).convert("RGB") if os.path.exists(edit_path) else None
     return pil, (npz_path if os.path.exists(npz_path) else None)
 
@@ -235,22 +249,24 @@ def export_one_key(
     dtr_pil.save(os.path.join(save_dir, "edited_dtr.png"))
     print(f"[{key}] wrote edited_base.png, edited_dtr.png  ({target_size})")
 
-    # ── 2b) Optional dtr2 (e.g. 3B) assets.
-    dtr2_pil: Optional[Image.Image] = None
-    dtr2_npz: Optional[str] = None
-    if out_root_dtr2:
-        dtr2_pil, dtr2_npz = _read_dtr2_assets(out_root_dtr2, key, task_type, language)
-        if dtr2_pil is None:
-            print(f"[{key}] WARN: dtr2 edit png missing under {out_root_dtr2}; "
-                  "skipping dtr2 row")
-        else:
-            if dtr2_pil.size != target_size:
-                dtr2_pil = dtr2_pil.resize(target_size, Image.LANCZOS)
-            dtr2_pil.save(os.path.join(save_dir, "edited_dtr2.png"))
-            print(f"[{key}] wrote edited_dtr2.png  ({target_size})")
-        if out_root_dtr2 and dtr2_npz is None:
-            print(f"[{key}] WARN: dtr2 attn npz missing under {out_root_dtr2}; "
+    # ── 2b) Optional dtr2 (e.g. 3B) assets. Auto-probe same-root layout if
+    # caller didn't pass --out_root_dtr2.
+    dtr2_pil, dtr2_npz = _read_dtr2_assets(
+        out_root_dtr2, out_root, key, task_type, language,
+    )
+    if dtr2_pil is not None:
+        if dtr2_pil.size != target_size:
+            dtr2_pil = dtr2_pil.resize(target_size, Image.LANCZOS)
+        dtr2_pil.save(os.path.join(save_dir, "edited_dtr2.png"))
+        print(f"[{key}] wrote edited_dtr2.png  ({target_size})")
+        if dtr2_npz is None:
+            src = out_root_dtr2 or f"{out_root}/attn_grids/{key}/daam_grids_dtr2.npz"
+            print(f"[{key}] WARN: dtr2 attn npz missing ({src}); "
                   "dtr2 attention overlays will be skipped")
+    elif out_root_dtr2:
+        # Caller explicitly asked for sibling root but it's not there.
+        print(f"[{key}] WARN: dtr2 edit png missing under {out_root_dtr2}; "
+              "skipping dtr2 row")
 
     # ── 3) Attention overlays.
     keywords = _load_keywords(out_root, key, user_keywords)

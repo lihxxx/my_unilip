@@ -35,7 +35,7 @@ OUT_ROOT="${OUT_ROOT:-results/vis_edit_compare_3b}"
 # override our default and break --language. Use a script-private name.
 GEDIT_LANGUAGE="${GEDIT_LANGUAGE:-en}"
 SEED="${SEED:-42}"
-GUIDANCE_SCALE="${GUIDANCE_SCALE:-4.5}"
+GUIDANCE_SCALE="${GUIDANCE_SCALE:-3.0}"
 MAX_CASES="${MAX_CASES:-0}"          # 0 = full set
 TOP_K="${TOP_K:-50}"                 # for selected_topk.json + plot defaults
 STEP_WINDOW="${STEP_WINDOW:-0.4,0.6}"

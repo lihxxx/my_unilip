@@ -21,7 +21,7 @@ DTR2_MODEL_PATH="/mnt/tidal-alsh01/dataset/zeus/lihongxiang/models/UniLIP-3B"
 PROMPT_JSON="${BASE_DIR}/prompts_vis.json"
 OUTPUT_DIR="${BASE_DIR}/results/vis_daam_compare3"
 
-GUIDANCE_SCALE=4.5
+GUIDANCE_SCALE=3.0
 SEED=42
 MAX_PROMPTS=40
 STEP_WINDOW="0.4,0.6"

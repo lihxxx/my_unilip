@@ -639,6 +639,12 @@ def main() -> None:
     )
     parser.add_argument("--baseline_model_path", required=True)
     parser.add_argument("--dtr_model_path", required=True)
+    parser.add_argument(
+        "--dtr2_model_path", default="",
+        help="Optional 3rd ckpt (e.g. UniLIP-3B with DTR). Outputs go to "
+             "generated/dtr2/ and attn_grids/{key}/daam_grids_dtr2.npz, "
+             "alongside the base/dtr products.",
+    )
     parser.add_argument("--out_root", default="results/vis_edit_compare")
     parser.add_argument(
         "--source", default="gedit", choices=["gedit", "sft"],
@@ -676,7 +682,7 @@ def main() -> None:
              "per SFT prompt for heat-map visualization.",
     )
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--guidance_scale", type=float, default=4.5)
+    parser.add_argument("--guidance_scale", type=float, default=3.0)
     parser.add_argument(
         "--max_cases", type=int, default=0,
         help="If >0, cap the number of cases (debugging).",
@@ -686,8 +692,10 @@ def main() -> None:
         help="Path to JSON list of GEdit keys to restrict to. Used in stage 3.",
     )
     parser.add_argument(
-        "--side", choices=["both", "base", "dtr"], default="both",
-        help="Run only one side (useful when re-doing a single ckpt).",
+        "--side", choices=["both", "base", "dtr", "dtr2", "all"], default="both",
+        help="Which pass(es) to run. 'both' = base+dtr (legacy default); "
+             "'all' = base+dtr+dtr2 (requires --dtr2_model_path); "
+             "or pick one of base/dtr/dtr2 to re-run a single ckpt.",
     )
 
     # Cross-attn capture options
@@ -805,7 +813,13 @@ def main() -> None:
 
     skip_existing = not args.no_skip_existing
 
-    if args.side in ("both", "base"):
+    sides = {args.side} if args.side not in ("both", "all") else (
+        {"base", "dtr"} if args.side == "both" else {"base", "dtr", "dtr2"}
+    )
+    if "dtr2" in sides and not args.dtr2_model_path.strip():
+        raise ValueError("--side requires dtr2 but --dtr2_model_path is empty.")
+
+    if "base" in sides:
         _run_pass(
             model_path=args.baseline_model_path,
             tag="base",
@@ -820,10 +834,25 @@ def main() -> None:
             skip_existing=skip_existing,
         )
 
-    if args.side in ("both", "dtr"):
+    if "dtr" in sides:
         _run_pass(
             model_path=args.dtr_model_path,
             tag="dtr",
+            items=items,
+            out_root=args.out_root,
+            seed=args.seed,
+            guidance_scale=args.guidance_scale,
+            capture_attn=args.capture_attn,
+            keywords_by_key=keywords_by_key,
+            step_window=step_window,
+            layer_indices=layer_indices,
+            skip_existing=skip_existing,
+        )
+
+    if "dtr2" in sides:
+        _run_pass(
+            model_path=args.dtr2_model_path,
+            tag="dtr2",
             items=items,
             out_root=args.out_root,
             seed=args.seed,

@@ -18,7 +18,7 @@ DTR_MODEL_PATH="${BASE_DIR}/results/unilip_intern_vl_1b_sft_alignment_distill05_
 PROMPT_JSON="${BASE_DIR}/prompts_vis.json"
 OUTPUT_DIR="${BASE_DIR}/results/vis_daam_compare"
 
-GUIDANCE_SCALE=4.5
+GUIDANCE_SCALE=3.0
 SEED=42
 MAX_PROMPTS=7
 STEP_WINDOW="0.4,0.6"
