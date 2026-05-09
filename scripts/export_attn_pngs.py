@@ -9,6 +9,15 @@ writes the following standalone PNGs (no figure axes / matplotlib chrome):
   ``{out_root}/png_export/{key}/attn_<kw>_base.png``  — base attn overlay on edited_base
   ``{out_root}/png_export/{key}/attn_<kw>_dtr.png``   — dtr  attn overlay on edited_dtr
 
+When ``--out_root_dtr2`` is supplied (a sibling pipeline output dir, e.g.
+``results/vis_sft_edit_3b`` produced by running visualize_edit_compare.py with
+``base=dtr=UniLIP-3B``), the export also writes:
+
+  ``{out_root}/png_export/{key}/edited_dtr2.png``     — dtr2 (e.g. 3B) edit
+  ``{out_root}/png_export/{key}/attn_<kw>_dtr2.png``  — dtr2 attn overlay
+
+Per-keyword vmin/vmax is then shared across all three checkpoints.
+
 The input is **resized to 448x448 with PIL.Image.LANCZOS** (no aspect-ratio
 preservation) to exactly match what the edit pipeline feeds the model
 (``unilip/pipeline_edit.py`` line 66: ``input_image.resize((448, 448))``).
@@ -150,6 +159,25 @@ def _row_lookup(out_root: str, key: str) -> Dict:
 # ────────────────────────────────────────────────────────────
 # Per-key export
 # ────────────────────────────────────────────────────────────
+def _read_dtr2_assets(
+    out_root_dtr2: str,
+    key: str,
+    task_type: str,
+    language: str,
+) -> Tuple[Optional[Image.Image], Optional[str]]:
+    """Locate dtr2 (e.g. 3B) edited PNG and attn npz under a sibling out_root.
+
+    The dtr2 pipeline is expected to have been launched with ``base=dtr=3B``,
+    so we always read the ``dtr/`` branch (it equals what the 3B model produced).
+    """
+    edit_path = os.path.join(out_root_dtr2, "generated", "dtr",
+                             task_type, language, f"{key}.png")
+    npz_path = os.path.join(out_root_dtr2, "attn_grids", key,
+                            "daam_grids_dtr.npz")
+    pil = Image.open(edit_path).convert("RGB") if os.path.exists(edit_path) else None
+    return pil, (npz_path if os.path.exists(npz_path) else None)
+
+
 def export_one_key(
     *,
     out_root: str,
@@ -160,6 +188,7 @@ def export_one_key(
     cmap: str,
     alpha: float,
     tokenizer,
+    out_root_dtr2: str = "",
 ) -> bool:
     """Export PNGs for a single key. Returns True on full success."""
     save_dir = os.path.join(out_root, "png_export", key)
@@ -206,6 +235,23 @@ def export_one_key(
     dtr_pil.save(os.path.join(save_dir, "edited_dtr.png"))
     print(f"[{key}] wrote edited_base.png, edited_dtr.png  ({target_size})")
 
+    # ── 2b) Optional dtr2 (e.g. 3B) assets.
+    dtr2_pil: Optional[Image.Image] = None
+    dtr2_npz: Optional[str] = None
+    if out_root_dtr2:
+        dtr2_pil, dtr2_npz = _read_dtr2_assets(out_root_dtr2, key, task_type, language)
+        if dtr2_pil is None:
+            print(f"[{key}] WARN: dtr2 edit png missing under {out_root_dtr2}; "
+                  "skipping dtr2 row")
+        else:
+            if dtr2_pil.size != target_size:
+                dtr2_pil = dtr2_pil.resize(target_size, Image.LANCZOS)
+            dtr2_pil.save(os.path.join(save_dir, "edited_dtr2.png"))
+            print(f"[{key}] wrote edited_dtr2.png  ({target_size})")
+        if out_root_dtr2 and dtr2_npz is None:
+            print(f"[{key}] WARN: dtr2 attn npz missing under {out_root_dtr2}; "
+                  "dtr2 attention overlays will be skipped")
+
     # ── 3) Attention overlays.
     keywords = _load_keywords(out_root, key, user_keywords)
     if not keywords:
@@ -214,12 +260,15 @@ def export_one_key(
 
     base_arr = np.asarray(base_pil).astype(np.float32) / 255.0
     dtr_arr = np.asarray(dtr_pil).astype(np.float32) / 255.0
+    dtr2_arr: Optional[np.ndarray] = None
+    if dtr2_pil is not None:
+        dtr2_arr = np.asarray(dtr2_pil).astype(np.float32) / 255.0
     H, W = base_arr.shape[:2]
 
     base_npz = os.path.join(out_root, "attn_grids", key, "daam_grids_base.npz")
     dtr_npz = os.path.join(out_root, "attn_grids", key, "daam_grids_dtr.npz")
     if not (os.path.exists(base_npz) and os.path.exists(dtr_npz)):
-        print(f"[{key}] WARN: attn npz missing; skipping overlays")
+        print(f"[{key}] WARN: base/dtr attn npz missing; skipping overlays")
         return True
 
     for kw in keywords:
@@ -228,8 +277,17 @@ def export_one_key(
         hb = _upsample_overlay(gb, (H, W)) if gb is not None else None
         hd = _upsample_overlay(gd, (H, W)) if gd is not None else None
 
-        # Per-keyword shared vmin/vmax across base & dtr so colours match.
-        finite = [h for h in (hb, hd) if h is not None and h.sum() > 1e-12]
+        h2 = None
+        s2 = "n/a"
+        if dtr2_npz is not None and dtr2_arr is not None:
+            g2, s2 = _resolve_grid_for_keyword(dtr2_npz, kw, tokenizer)
+            h2 = _upsample_overlay(g2, (H, W)) if g2 is not None else None
+
+        # Per-keyword shared vmin/vmax across all available rows so colours match.
+        candidates = [hb, hd]
+        if h2 is not None:
+            candidates.append(h2)
+        finite = [h for h in candidates if h is not None and h.sum() > 1e-12]
         if finite:
             vmin = float(min(h.min() for h in finite))
             vmax = float(max(h.max() for h in finite))
@@ -241,9 +299,15 @@ def export_one_key(
         d_path = os.path.join(save_dir, f"attn_{slug}_dtr.png")
         ok_b = _overlay_to_png(base_arr, hb, vmin, vmax, b_path, cmap, alpha)
         ok_d = _overlay_to_png(dtr_arr, hd, vmin, vmax, d_path, cmap, alpha)
-        print(f"[{key}] kw='{kw}' base={sb} dtr={sd} -> "
-              f"{'attn' if ok_b else 'plain'}_{slug}_base.png, "
-              f"{'attn' if ok_d else 'plain'}_{slug}_dtr.png")
+
+        msg = (f"[{key}] kw='{kw}' base={sb} dtr={sd} -> "
+               f"{'attn' if ok_b else 'plain'}_{slug}_base.png, "
+               f"{'attn' if ok_d else 'plain'}_{slug}_dtr.png")
+        if dtr2_arr is not None:
+            d2_path = os.path.join(save_dir, f"attn_{slug}_dtr2.png")
+            ok_2 = _overlay_to_png(dtr2_arr, h2, vmin, vmax, d2_path, cmap, alpha)
+            msg += f", dtr2={s2} -> {'attn' if ok_2 else 'plain'}_{slug}_dtr2.png"
+        print(msg)
 
     return True
 
@@ -274,6 +338,12 @@ def main():
                         help="Optional tokenizer path used by "
                              "_resolve_grid_for_keyword to recompute keyword "
                              "grids from raw attn (matches plot_sft_edit.py).")
+    parser.add_argument("--out_root_dtr2", default="",
+                        help="Optional sibling pipeline root holding the dtr2 "
+                             "(e.g. UniLIP-3B) products. When set, exports an "
+                             "extra edited_dtr2.png and attn_<kw>_dtr2.png per "
+                             "keyword. The dtr2 pipeline must have been launched "
+                             "with base=dtr=3B so the dtr/ branch holds 3B output.")
     args = parser.parse_args()
 
     keys = [k.strip() for k in args.keys.split(",") if k.strip()]
@@ -312,6 +382,7 @@ def main():
                 cmap=args.cmap,
                 alpha=args.alpha,
                 tokenizer=tokenizer,
+                out_root_dtr2=args.out_root_dtr2,
             ):
                 n_ok += 1
         except Exception as e:  # noqa: BLE001
