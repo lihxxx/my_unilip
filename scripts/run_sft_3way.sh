@@ -13,11 +13,14 @@
 #                 keywords_auto.json (auto-extracted)
 #   export   : export_attn_pngs.py for ALL keys in selected_keys.json
 #              -> png_export/{key}/{input,edited_*,attn_*}.png
-#   all      : capture -> export
+#   plot     : plot_sft_edit.py for ALL keys -> 3-row compare figures
+#              -> compare_figs/{key}/edit_compare.{pdf,png}
+#   all      : capture -> export -> plot
 #
 # Usage:
 #   bash scripts/run_sft_3way.sh capture
 #   bash scripts/run_sft_3way.sh export
+#   bash scripts/run_sft_3way.sh plot
 #   bash scripts/run_sft_3way.sh all
 set -euo pipefail
 
@@ -33,7 +36,7 @@ SFT_TAR_GLOB="${SFT_TAR_GLOB:-${SHARD_ROOT}/*.tar}"
 
 # ─────────────────── Knobs ───────────────────
 SFT_SAMPLE_N="${SFT_SAMPLE_N:-50}"
-SFT_SAMPLE_SEED="${SFT_SAMPLE_SEED:-0}"
+SFT_SAMPLE_SEED="${SFT_SAMPLE_SEED:-1}"
 SFT_MAX_PROMPT_WORDS="${SFT_MAX_PROMPT_WORDS:-10}"
 SFT_MAX_KEYWORDS="${SFT_MAX_KEYWORDS:-4}"
 SEED="${SEED:-42}"
@@ -122,16 +125,36 @@ print(','.join(r['key'] for r in rows))
   echo ">> Export finished. Per-key PNGs under: ${OUT_ROOT}/png_export/<key>/"
 }
 
+run_plot() {
+  echo_header "[STAGE: plot] 3-row compare figures via plot_sft_edit.py"
+  local sel="${OUT_ROOT}/selected_keys.json"
+  if [[ ! -f "${sel}" ]]; then
+    echo "ERROR: ${sel} not found. Run the 'capture' stage first." >&2
+    exit 1
+  fi
+  python -u scripts/plot_sft_edit.py \
+    --out_root       "${OUT_ROOT}" \
+    --shard_root     "${SHARD_ROOT}" \
+    --tokenizer_path "${BASE_CKPT}" \
+    --baseline_label "Baseline (1B)" \
+    --dtr_label      "DTR (1B)" \
+    --dtr2_label     "DTR (3B)"
+  echo
+  echo ">> Plot finished. Per-key compare figures: ${OUT_ROOT}/compare_figs/<key>/edit_compare.{pdf,png}"
+}
+
 case "${STAGE}" in
   capture) run_capture ;;
   export)  run_export  ;;
+  plot)    run_plot    ;;
   all)
     run_capture
     run_export
+    run_plot
     ;;
   *)
     echo "Unknown stage: ${STAGE}" >&2
-    echo "Use one of: capture | export | all" >&2
+    echo "Use one of: capture | export | plot | all" >&2
     exit 1
     ;;
 esac

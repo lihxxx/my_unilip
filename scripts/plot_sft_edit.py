@@ -143,6 +143,7 @@ def plot_one(
     overlay_alpha: float = 0.55,
     baseline_label: str = "Baseline",
     dtr_label: str = "DTR (Ours)",
+    dtr2_label: str = "DTR-3B (Ours)",
     title_max_words: int = 12,
 ) -> Optional[str]:
     key = row["key"]
@@ -164,43 +165,60 @@ def plot_one(
         print(f"[{key}] skip: input image not loadable from {shard}:{stem}.")
         return None
 
-    # 2) Generated images.
+    # 2) Generated images. dtr2 is auto-detected when present.
     task_type = row.get("task_type", "sft_edit")
     language = row.get("instruction_language", "en")
     base_path = os.path.join(out_root, "generated", "base", task_type, language,
                              f"{key}.png")
     dtr_path = os.path.join(out_root, "generated", "dtr", task_type, language,
                             f"{key}.png")
+    dtr2_path = os.path.join(out_root, "generated", "dtr2", task_type, language,
+                             f"{key}.png")
     if not (os.path.exists(base_path) and os.path.exists(dtr_path)):
         print(f"[{key}] skip: missing generated image(s).")
         return None
     base_pil = Image.open(base_path).convert("RGB")
     dtr_pil = Image.open(dtr_path).convert("RGB")
+    has_dtr2 = os.path.exists(dtr2_path)
+    dtr2_pil = Image.open(dtr2_path).convert("RGB") if has_dtr2 else None
 
     base_arr = np.asarray(base_pil).astype(np.float32) / 255.0
     dtr_arr = np.asarray(dtr_pil).astype(np.float32) / 255.0
+    dtr2_arr = (np.asarray(dtr2_pil).astype(np.float32) / 255.0
+                if dtr2_pil is not None else None)
     inp_arr = np.asarray(input_pil).astype(np.float32) / 255.0
 
-    # 3) Resolve heat-maps for ALL keywords on both ckpts.
+    # 3) Resolve heat-maps for ALL keywords on all available ckpts.
     base_npz = os.path.join(out_root, "attn_grids", key, "daam_grids_base.npz")
     dtr_npz = os.path.join(out_root, "attn_grids", key, "daam_grids_dtr.npz")
+    dtr2_npz = os.path.join(out_root, "attn_grids", key, "daam_grids_dtr2.npz")
+    has_dtr2_attn = has_dtr2 and os.path.exists(dtr2_npz)
     Hb, Wb = base_arr.shape[:2]
     Hd, Wd = dtr_arr.shape[:2]
+    H2, W2 = (dtr2_arr.shape[:2] if dtr2_arr is not None else (Hb, Wb))
     heats_b: List[Optional[np.ndarray]] = []
     heats_d: List[Optional[np.ndarray]] = []
+    heats_2: List[Optional[np.ndarray]] = []
     for kw in keywords:
         gb, sb = _resolve_grid_for_keyword(base_npz, kw, tokenizer)
         gd, sd = _resolve_grid_for_keyword(dtr_npz, kw, tokenizer)
-        print(f"[{key}] kw='{kw}' base={sb} dtr={sd}")
         hb = _upsample_overlay(gb, (Hb, Wb)) if gb is not None else None
         hd = _upsample_overlay(gd, (Hd, Wd)) if gd is not None else None
         heats_b.append(hb)
         heats_d.append(hd)
+        if has_dtr2_attn:
+            g2, s2 = _resolve_grid_for_keyword(dtr2_npz, kw, tokenizer)
+            h2 = _upsample_overlay(g2, (H2, W2)) if g2 is not None else None
+            heats_2.append(h2)
+            print(f"[{key}] kw='{kw}' base={sb} dtr={sd} dtr2={s2}")
+        else:
+            heats_2.append(None)
+            print(f"[{key}] kw='{kw}' base={sb} dtr={sd}")
 
-    # Per-keyword vmin/vmax computed across both ckpts so colors match.
+    # Per-keyword vmin/vmax across all available rows so colors match.
     vminmax: List[tuple] = []
-    for hb, hd in zip(heats_b, heats_d):
-        finite = [h for h in (hb, hd) if h is not None and h.sum() > 1e-12]
+    for hb, hd, h2 in zip(heats_b, heats_d, heats_2):
+        finite = [h for h in (hb, hd, h2) if h is not None and h.sum() > 1e-12]
         if finite:
             vmin = float(min(h.min() for h in finite))
             vmax = float(max(h.max() for h in finite))
@@ -208,18 +226,26 @@ def plot_one(
             vmin, vmax = 0.0, 1.0
         vminmax.append((vmin, vmax))
 
-    # 4) Figure: 2 rows x (2 + N_kw) cols.
+    # 4) Figure: N rows x (2 + N_kw) cols. N = 3 if dtr2 present else 2.
     n_kw = len(keywords)
     n_cols = 2 + n_kw
+    rows_data = [
+        (baseline_label, base_arr, heats_b),
+        (dtr_label, dtr_arr, heats_d),
+    ]
+    if dtr2_arr is not None:
+        rows_data.append((dtr2_label, dtr2_arr, heats_2))
+    n_rows = len(rows_data)
+
     fig, axes = plt.subplots(
-        2, n_cols,
-        figsize=(3.4 * n_cols, 3.6 * 2),
+        n_rows, n_cols,
+        figsize=(3.4 * n_cols, 3.6 * n_rows),
         gridspec_kw={"wspace": 0.05, "hspace": 0.16},
         squeeze=False,
     )
 
-    # Col 0: input image (same on both rows).
-    for r_idx, label in enumerate((baseline_label, dtr_label)):
+    # Col 0: input image (same on every row).
+    for r_idx, (label, _, _) in enumerate(rows_data):
         ax = axes[r_idx, 0]
         ax.imshow(inp_arr)
         ax.set_xticks([]); ax.set_yticks([])
@@ -228,20 +254,20 @@ def plot_one(
         ax.set_ylabel(label, fontsize=12, fontweight="bold")
 
     # Col 1: edited result.
-    axes[0, 1].imshow(base_arr); axes[0, 1].set_xticks([]); axes[0, 1].set_yticks([])
-    axes[0, 1].set_title("Edit Result", fontsize=12)
-    axes[1, 1].imshow(dtr_arr); axes[1, 1].set_xticks([]); axes[1, 1].set_yticks([])
+    for r_idx, (_, edit_arr, _) in enumerate(rows_data):
+        ax = axes[r_idx, 1]
+        ax.imshow(edit_arr); ax.set_xticks([]); ax.set_yticks([])
+        if r_idx == 0:
+            ax.set_title("Edit Result", fontsize=12)
 
     # Cols 2..: per-keyword heat-map overlays.
-    for c, (kw, hb, hd, (vmin, vmax)) in enumerate(
-            zip(keywords, heats_b, heats_d, vminmax)):
+    for c, (kw, (vmin, vmax)) in enumerate(zip(keywords, vminmax)):
         col = 2 + c
-        _draw_overlay(axes[0, col], base_arr,
-                      hb if (hb is not None and hb.sum() > 1e-12) else None,
-                      kw, vmin, vmax, cmap, overlay_alpha)
-        _draw_overlay(axes[1, col], dtr_arr,
-                      hd if (hd is not None and hd.sum() > 1e-12) else None,
-                      kw, vmin, vmax, cmap, overlay_alpha)
+        for r_idx, (_, edit_arr, heats) in enumerate(rows_data):
+            h = heats[c]
+            _draw_overlay(axes[r_idx, col], edit_arr,
+                          h if (h is not None and h.sum() > 1e-12) else None,
+                          kw, vmin, vmax, cmap, overlay_alpha)
 
     title = f"[{key}]  {_truncate_for_title(row.get('instruction', ''), title_max_words)}"
     fig.suptitle(title, fontsize=10, y=0.995)
@@ -285,6 +311,9 @@ def main() -> None:
                              "Default: $BASE_CKPT, else skip recompute.")
     parser.add_argument("--baseline_label", default="Baseline")
     parser.add_argument("--dtr_label", default="DTR (Ours)")
+    parser.add_argument("--dtr2_label", default="DTR-3B (Ours)",
+                        help="Row label for the optional 3rd ckpt. Auto-shown "
+                             "iff generated/dtr2/{key}.png exists.")
     args = parser.parse_args()
 
     out_root = os.path.abspath(args.out_root)
@@ -335,6 +364,7 @@ def main() -> None:
             tokenizer=tokenizer,
             baseline_label=args.baseline_label,
             dtr_label=args.dtr_label,
+            dtr2_label=args.dtr2_label,
         )
         if path:
             print(f"[{key}] -> {path}")
