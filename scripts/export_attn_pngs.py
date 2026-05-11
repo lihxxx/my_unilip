@@ -60,39 +60,65 @@ def _safe_name(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", s).strip("_") or "kw"
 
 
-def _overlay_to_png(
+def _center_crop_pct(pil: Image.Image, pct: float) -> Image.Image:
+    """Crop ``pct`` percent off each side (top/bottom/left/right).
+
+    pct=10 -> keep central 80% region; pct=20 -> keep central 60% region.
+    """
+    if pct <= 0:
+        return pil
+    W, H = pil.size
+    dx = int(round(W * pct / 100.0))
+    dy = int(round(H * pct / 100.0))
+    return pil.crop((dx, dy, W - dx, H - dy))
+
+
+def _save_with_crops(
+    pil: Image.Image,
+    save_dir: str,
+    filename: str,
+    crop_pcts: List[int],
+) -> None:
+    """Save ``pil`` to ``save_dir/filename`` plus one copy per crop_pct under
+    ``save_dir/crop{pct}/{filename}``. pct==0 is implicit (the un-cropped one).
+    """
+    pil.save(os.path.join(save_dir, filename))
+    for pct in crop_pcts:
+        if pct == 0:
+            continue
+        sub = os.path.join(save_dir, f"crop{pct}")
+        os.makedirs(sub, exist_ok=True)
+        _center_crop_pct(pil, pct).save(os.path.join(sub, filename))
+
+
+def _overlay_pil(
     base_img: np.ndarray,
     heat: Optional[np.ndarray],
     vmin: float,
     vmax: float,
-    out_path: str,
     cmap_name: str = "jet",
     alpha: float = 0.55,
-) -> bool:
+) -> Tuple[Image.Image, bool]:
     """Blend ``heat`` (already upsampled to base_img H,W) on ``base_img`` and
-    save as a borderless PNG of the same pixel dims as ``base_img``.
+    return a PIL image of the same pixel dims as ``base_img``.
 
-    Returns False if heat is None / all-zero (writes the bare base image
-    instead so downstream paper layout stays intact)."""
-    H, W = base_img.shape[:2]
+    Second tuple element is False if heat is None / all-zero (in which case
+    the returned PIL is just the bare base image so downstream paper layout
+    stays intact)."""
     base_uint8 = (np.clip(base_img, 0.0, 1.0) * 255.0).round().astype(np.uint8)
 
     if heat is None or heat.sum() <= 1e-12:
-        Image.fromarray(base_uint8).save(out_path)
-        return False
+        return Image.fromarray(base_uint8), False
 
     denom = max(vmax - vmin, 1e-8)
     heat_n = np.clip((heat - vmin) / denom, 0.0, 1.0)
 
-    # cm.<name> returns RGBA in [0,1]; drop alpha, scale to uint8.
     cmap = cm.get_cmap(cmap_name)
     heat_rgb = cmap(heat_n)[..., :3]  # (H, W, 3) float
     heat_uint8 = (heat_rgb * 255.0).round().astype(np.uint8)
 
-    # Alpha-blend per pixel. Matches matplotlib imshow(alpha=...).
     blended = (alpha * heat_uint8 + (1.0 - alpha) * base_uint8).round().astype(np.uint8)
-    Image.fromarray(blended).save(out_path)
-    return True
+    return Image.fromarray(blended), True
 
 
 def _load_keywords(
@@ -203,10 +229,12 @@ def export_one_key(
     alpha: float,
     tokenizer,
     out_root_dtr2: str = "",
+    crop_pcts: Optional[List[int]] = None,
 ) -> bool:
     """Export PNGs for a single key. Returns True on full success."""
     save_dir = os.path.join(out_root, "png_export", key)
     os.makedirs(save_dir, exist_ok=True)
+    crop_pcts = crop_pcts or []
 
     row = _row_lookup(out_root, key)
     task_type = row.get("task_type", "sft_edit")
@@ -223,9 +251,9 @@ def export_one_key(
         print(f"[{key}] FAIL: input image not loadable from {shard_name}:{stem}")
         return False
     input_pil = input_pil.convert("RGB").resize(target_size, Image.LANCZOS)
-    input_path = os.path.join(save_dir, "input.png")
-    input_pil.save(input_path)
-    print(f"[{key}] wrote {input_path}  ({input_pil.size})")
+    _save_with_crops(input_pil, save_dir, "input.png", crop_pcts)
+    print(f"[{key}] wrote input.png  ({input_pil.size})"
+          + (f" + crops {crop_pcts}" if crop_pcts else ""))
 
     # ── 2) Edited PNGs: resize to target_size to guarantee identical dims
     # (they're already 448x448 in this run, but be safe for future runs).
@@ -245,8 +273,8 @@ def export_one_key(
         base_pil = base_pil.resize(target_size, Image.LANCZOS)
     if dtr_pil.size != target_size:
         dtr_pil = dtr_pil.resize(target_size, Image.LANCZOS)
-    base_pil.save(os.path.join(save_dir, "edited_base.png"))
-    dtr_pil.save(os.path.join(save_dir, "edited_dtr.png"))
+    _save_with_crops(base_pil, save_dir, "edited_base.png", crop_pcts)
+    _save_with_crops(dtr_pil, save_dir, "edited_dtr.png", crop_pcts)
     print(f"[{key}] wrote edited_base.png, edited_dtr.png  ({target_size})")
 
     # ── 2b) Optional dtr2 (e.g. 3B) assets. Auto-probe same-root layout if
@@ -257,7 +285,7 @@ def export_one_key(
     if dtr2_pil is not None:
         if dtr2_pil.size != target_size:
             dtr2_pil = dtr2_pil.resize(target_size, Image.LANCZOS)
-        dtr2_pil.save(os.path.join(save_dir, "edited_dtr2.png"))
+        _save_with_crops(dtr2_pil, save_dir, "edited_dtr2.png", crop_pcts)
         print(f"[{key}] wrote edited_dtr2.png  ({target_size})")
         if dtr2_npz is None:
             src = out_root_dtr2 or f"{out_root}/attn_grids/{key}/daam_grids_dtr2.npz"
@@ -311,17 +339,17 @@ def export_one_key(
             vmin, vmax = 0.0, 1.0
 
         slug = _safe_name(kw)
-        b_path = os.path.join(save_dir, f"attn_{slug}_base.png")
-        d_path = os.path.join(save_dir, f"attn_{slug}_dtr.png")
-        ok_b = _overlay_to_png(base_arr, hb, vmin, vmax, b_path, cmap, alpha)
-        ok_d = _overlay_to_png(dtr_arr, hd, vmin, vmax, d_path, cmap, alpha)
+        b_pil, ok_b = _overlay_pil(base_arr, hb, vmin, vmax, cmap, alpha)
+        d_pil, ok_d = _overlay_pil(dtr_arr, hd, vmin, vmax, cmap, alpha)
+        _save_with_crops(b_pil, save_dir, f"attn_{slug}_base.png", crop_pcts)
+        _save_with_crops(d_pil, save_dir, f"attn_{slug}_dtr.png", crop_pcts)
 
         msg = (f"[{key}] kw='{kw}' base={sb} dtr={sd} -> "
                f"{'attn' if ok_b else 'plain'}_{slug}_base.png, "
                f"{'attn' if ok_d else 'plain'}_{slug}_dtr.png")
         if dtr2_arr is not None:
-            d2_path = os.path.join(save_dir, f"attn_{slug}_dtr2.png")
-            ok_2 = _overlay_to_png(dtr2_arr, h2, vmin, vmax, d2_path, cmap, alpha)
+            d2_pil, ok_2 = _overlay_pil(dtr2_arr, h2, vmin, vmax, cmap, alpha)
+            _save_with_crops(d2_pil, save_dir, f"attn_{slug}_dtr2.png", crop_pcts)
             msg += f", dtr2={s2} -> {'attn' if ok_2 else 'plain'}_{slug}_dtr2.png"
         print(msg)
 
@@ -360,11 +388,24 @@ def main():
                              "extra edited_dtr2.png and attn_<kw>_dtr2.png per "
                              "keyword. The dtr2 pipeline must have been launched "
                              "with base=dtr=3B so the dtr/ branch holds 3B output.")
+    parser.add_argument("--crop_pcts", default="",
+                        help="Comma-separated extra crop versions, in percent "
+                             "trimmed off EACH side. Example: '10,20' writes "
+                             "an additional crop10/ and crop20/ subdir under "
+                             "every key's png_export. Default: no extra crops.")
     args = parser.parse_args()
 
     keys = [k.strip() for k in args.keys.split(",") if k.strip()]
     if not keys:
         sys.exit("No --keys provided.")
+
+    crop_pcts: List[int] = []
+    if args.crop_pcts.strip():
+        crop_pcts = [int(x) for x in args.crop_pcts.split(",") if x.strip()]
+        for p in crop_pcts:
+            if not (0 < p < 50):
+                sys.exit(f"--crop_pcts entries must be in (0, 50); got {p}")
+        print(f">>> Will also write crops at {crop_pcts}% (each side)")
 
     user_keywords: Optional[List[str]] = None
     if args.keywords.strip():
@@ -399,6 +440,7 @@ def main():
                 alpha=args.alpha,
                 tokenizer=tokenizer,
                 out_root_dtr2=args.out_root_dtr2,
+                crop_pcts=crop_pcts,
             ):
                 n_ok += 1
         except Exception as e:  # noqa: BLE001
